@@ -1,5 +1,6 @@
-export const siteUrl =
-  process.env.NEXT_PUBLIC_SITE_URL ?? "https://www.macasmoon.com";
+export const siteUrl = (
+  process.env.NEXT_PUBLIC_SITE_URL ?? "https://macasmoonglampings.com"
+).replace(/\/+$/, "");
 
 export const sitePhone = {
   display: "+506 7111 0261",
