@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { GoogleAnalytics } from "@next/third-parties/google";
 import { Lora, Nunito_Sans } from "next/font/google";
 import { Footer } from "@/components/layout/Footer";
 import { Navbar } from "@/components/layout/Navbar";
@@ -8,6 +9,8 @@ import { JsonLd } from "@/components/seo/JsonLd";
 import { websiteJsonLd } from "@/lib/jsonLd";
 import { site, siteUrl } from "@/lib/site";
 import "./globals.css";
+
+const gaId = process.env.NEXT_PUBLIC_GA_ID;
 
 const lora = Lora({
   subsets: ["latin"],
@@ -69,6 +72,7 @@ export default function RootLayout({
           <WhatsAppButton />
         </LanguageProvider>
       </body>
+      {gaId ? <GoogleAnalytics gaId={gaId} /> : null}
     </html>
   );
 }
