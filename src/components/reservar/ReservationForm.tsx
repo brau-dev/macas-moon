@@ -3,6 +3,9 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Calendar, ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/Button";
+import { AvailabilityCalendar } from "@/components/reservar/AvailabilityCalendar";
+import type { AvailabilityResponse } from "@/lib/availability-types";
+import { overlapsBlocked } from "@/lib/availability-types";
 import { domes } from "@/data/domes";
 import { submitReservationRequest } from "@/lib/reservations";
 import { useLanguage } from "@/i18n/LanguageProvider";
@@ -296,7 +299,37 @@ export function ReservationForm({ initialDome }: ReservationFormProps) {
   const [submittedUrl, setSubmittedUrl] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState("");
+  const [availability, setAvailability] = useState<AvailabilityResponse | null>(null);
   const submittingRef = useRef(false);
+
+  useEffect(() => {
+    if (!domeSlug) return;
+    const controller = new AbortController();
+    function refresh() {
+      fetch(`/api/availability/${domeSlug}`, { cache: "no-store", signal: controller.signal })
+        .then((response) => {
+          if (!response.ok) throw new Error("Availability unavailable");
+          return response.json() as Promise<AvailabilityResponse>;
+        })
+        .then((result) => setAvailability(result))
+        .catch(() => {
+          if (!controller.signal.aborted) {
+            setAvailability({ status: "error", blocked: [], checkedAt: null });
+          }
+        });
+    }
+    function refreshOnVisible() {
+      if (document.visibilityState === "visible") refresh();
+    }
+    refresh();
+    const interval = window.setInterval(refresh, 60_000);
+    document.addEventListener("visibilitychange", refreshOnVisible);
+    return () => {
+      controller.abort();
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", refreshOnVisible);
+    };
+  }, [domeSlug]);
 
   const selectedDome = useMemo(
     () => domes.find((dome) => dome.slug === domeSlug),
@@ -321,6 +354,10 @@ export function ReservationForm({ initialDome }: ReservationFormProps) {
     if (honeypot.trim()) return;
     if (checkIn < minCheckIn || checkOut <= checkIn) {
       setFormError(t("Revisa las fechas: la salida debe ser posterior a la llegada."));
+      return;
+    }
+    if (availability?.status === "ready" && overlapsBlocked(checkIn, checkOut, availability.blocked)) {
+      setFormError(t("Las fechas seleccionadas incluyen noches ocupadas. Elige otras fechas."));
       return;
     }
     if (!phone || !isValidPhoneNumber(phone) || phone.length > FIELD_LIMITS.phone) {
@@ -406,6 +443,9 @@ export function ReservationForm({ initialDome }: ReservationFormProps) {
             onChange={(event) => {
               const nextSlug = event.target.value;
               setDomeSlug(nextSlug);
+              setAvailability(null);
+              setCheckIn("");
+              setCheckOut("");
               const capacity = domes.find((dome) => dome.slug === nextSlug)?.capacity ?? highestCapacity;
               setGuests((current) => clampGuests(current, capacity));
             }}
@@ -423,6 +463,23 @@ export function ReservationForm({ initialDome }: ReservationFormProps) {
         )}
       </label>
 
+      {domeSlug ? (
+        <AvailabilityCalendar
+          availability={availability}
+          checkIn={checkIn}
+          checkOut={checkOut}
+          onSelect={(arrival, departure) => {
+            setCheckIn(arrival);
+            setCheckOut(departure);
+            setFormError("");
+          }}
+        />
+      ) : (
+        <p className="rounded-2xl bg-sand-50 px-4 py-3 text-sm text-muted">
+          {t("Elige un domo para ver su calendario.")}
+        </p>
+      )}
+
       <div className="grid gap-6 sm:grid-cols-2">
         <DateField
           label={t("Fecha de llegada")}
@@ -433,8 +490,8 @@ export function ReservationForm({ initialDome }: ReservationFormProps) {
           fieldClass={fieldClass}
           onChange={(nextCheckIn) => {
             setCheckIn(nextCheckIn);
-            if (checkOut && nextCheckIn && checkOut <= nextCheckIn) {
-              setCheckOut(addDays(nextCheckIn, 1));
+            if (checkOut && (checkOut <= nextCheckIn || (availability?.status === "ready" && overlapsBlocked(nextCheckIn, checkOut, availability.blocked)))) {
+              setCheckOut("");
             }
           }}
         />

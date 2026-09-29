@@ -38,7 +38,7 @@ export const houseRules: HouseRule[] = [
   {
     id: "cancel",
     title: "Cancelación",
-    text: "Las condiciones de cancelación se confirman al aceptar la reserva. Esta solicitud inicial no genera un cargo automático.",
+    text: "Consulta las condiciones de cancelación con el anfitrión antes de confirmar. Las solicitudes enviadas por WhatsApp no generan un cargo automático.",
   },
   {
     id: "nature",

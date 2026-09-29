@@ -9,7 +9,8 @@ export const faqItems = [
   },
   {
     question: "¿Qué métodos de pago aceptan?",
-    answer: "Aceptamos SINPE Móvil, transferencia bancaria y PayPal.",
+    answer:
+      "Por ahora no procesamos pagos en esta página. Escríbenos por WhatsApp para consultar los métodos de pago disponibles y confirmar tu reserva.",
   },
   {
     question: "¿Cuál es la política de cancelación y reembolso?",
