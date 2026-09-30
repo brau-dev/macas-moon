@@ -4,8 +4,9 @@ import type { OccupiedRange } from "@/lib/availability-types";
 let pool: Pool | undefined;
 
 export function getPool() {
-  if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is not configured");
-  pool ??= new Pool({ connectionString: process.env.DATABASE_URL, max: 3 });
+  const connectionString = process.env.NETLIFY_DB_URL || process.env.DATABASE_URL;
+  if (!connectionString) throw new Error("Neither NETLIFY_DB_URL nor DATABASE_URL is configured");
+  pool ??= new Pool({ connectionString, max: 3 });
   return pool;
 }
 

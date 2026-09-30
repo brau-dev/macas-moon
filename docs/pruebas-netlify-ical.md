@@ -2,17 +2,18 @@
 
 Esta guía publica esta copia de trabajo, sin commit y sin modificar macasmoon.com. No actives el cobro real en esta prueba. Consulta también [reservas-directas-ical-tilopay.md](reservas-directas-ical-tilopay.md).
 
+**Qué hace cada parte:** el sitio de Netlify muestra la página y ejecuta sus funciones; Netlify Database guarda las reservas; los enlaces iCal intercambian noches ocupadas con Airbnb y Expedia. Crear la base no publica la web ni conecta los calendarios por sí solo.
+
 ## 1. Sitio y base de datos de pruebas
 
 1. Comprueba la rama con `git branch --show-current`; no hagas merge en main.
 2. Crea otro proyecto de Netlify sin asociarle macasmoon.com ni el proyecto que publica la web. Usa un subdominio estable como https://macas-moon-pruebas.netlify.app. Copia el **Project ID** de Project configuration → General → Project information.
-3. Crea una base PostgreSQL accesible desde Netlify, diferente de cualquier producción. Aplica [db/001_reservations.sql](../db/001_reservations.sql) con el editor SQL o psql. Una base en localhost no sirve.
-4. En Project configuration → Environment variables del **nuevo** proyecto, configura las variables siguientes. Si Netlify ofrece scopes, NEXT_PUBLIC_* debe estar disponible en Builds, BOOKING_TEST_MODE en Builds **y** Functions (también genera robots.txt), y los secretos en Functions. Tras cambiar variables, vuelve a desplegar. No copies todo .env.local ni publiques secretos.
+3. En **ese mismo proyecto de pruebas**, entra en **Data & Storage → Database → Create a database manually**. Es una base PostgreSQL integrada en Netlify; **no necesitas cuenta en Neon, instalar PostgreSQL ni copiar una cadena de conexión**. Comprueba primero que tu plan permite Netlify Database y revisa su consumo de créditos. La aplicación usa automáticamente la variable privada `NETLIFY_DB_URL` que aporta Netlify. En el siguiente deploy, la migración [0001_create_reservations.sql](../netlify/database/migrations/0001_create_reservations.sql) crea las tablas `reservations` y `reservation_nights`. **No pegues el SQL a mano**.
+4. En **Project configuration → Environment variables** del proyecto de pruebas, crea cada variable de la tabla siguiente con su valor. Si Netlify ofrece scopes, selecciona **All scopes** para esta prueba; así las variables necesarias estarán tanto en el build como en las funciones. Tras cambiarlas, vuelve a desplegar. No copies todo .env.local ni publiques secretos. **No crees `DATABASE_URL`, `NETLIFY_DB_URL` ni `SITE_ID`: Netlify proporciona las dos últimas automáticamente**.
 
 | Variable | Valor |
 | --- | --- |
 | NEXT_PUBLIC_SITE_URL, BOOKING_SITE_URL | URL HTTPS exacta del nuevo sitio |
-| DATABASE_URL | Cadena privada de la base de pruebas |
 | BOOKING_ENABLED | true |
 | BOOKING_CURRENCY | USD o moneda acordada |
 | PRICE_DOMO_ROMANTICO_CENTS, PRICE_DOMO_AMPLIO_CENTS | Tarifas positivas en centavos; se muestran pero no se cobran con la clave de prueba |
@@ -22,7 +23,7 @@ Esta guía publica esta copia de trabajo, sin commit y sin modificar macasmoon.c
 | BOOKING_TEST_SITE_ID | Project ID del nuevo proyecto |
 | TILOPAY_CHECKOUT_ENABLED, BOOKING_RECONCILE_ENABLED | false |
 | ICAL_DOMO_ROMANTICO_AIRBNB_URL, ICAL_DOMO_ROMANTICO_EXPEDIA_URL, ICAL_DOMO_AMPLIO_AIRBNB_URL, ICAL_DOMO_AMPLIO_EXPEDIA_URL | Enlaces privados que exportan los cuatro anuncios, emparejados con el domo correcto |
-| ICAL_EXPORT_ROMANTICO_TOKEN, ICAL_EXPORT_AMPLIO_TOKEN | Dos tokens de salida distintos de al menos 24 caracteres [A-Za-z0-9_-]; puedes reutilizar los que ya generaste para ese fin |
+| ICAL_EXPORT_ROMANTICO_TOKEN, ICAL_EXPORT_AMPLIO_TOKEN | Genera dos tokens de salida nuevos y distintos de al menos 24 caracteres [A-Za-z0-9_-], uno por domo, por ejemplo con openssl rand -hex 32 ejecutado dos veces |
 
 Si en .env.local aún tienes ICAL_*_BOOKING_URL, cambia el nombre a ICAL_*_EXPEDIA_URL **sólo si su valor realmente es un enlace de Expedia**. Los enlaces de Booking.com no sustituyen los de Expedia. BOOKING_TEST_SECRET debe ser distinto de los dos tokens de calendario.
 
@@ -39,13 +40,15 @@ La integración Git de Netlify no ve cambios locales sin commit. Usa Netlify CLI
     npx netlify-cli@latest login
     npx netlify-cli@latest deploy --prod --site ID_DEL_SITIO_DE_PRUEBAS --context production
 
-El deploy construye los archivos locales; no requiere commit. La opción --prod publica en la URL principal **del sitio indicado por --site**: verifica ese ID antes de ejecutarla. Nunca uses el ID del proyecto que atiende macasmoon.com. Node debe ser compatible con Next 16 (al menos 20.9). El build en Netlify usa Node 20 según netlify.toml.
+El deploy construye los archivos locales; no requiere commit. La opción --prod publica en la URL principal **del sitio indicado por --site**: verifica ese ID antes de ejecutarla. Nunca uses el ID del proyecto que atiende macasmoon.com. Node debe ser compatible con Next 16 (al menos 20.9). El build en Netlify usa Node 20 según netlify.toml. **La migración de Netlify Database debe crear las tablas antes de publicar el deploy**; si falla, consulta los logs del deploy y no intentes crear reservas todavía.
 
 No conectes macasmoon.com a este sitio. El modo de prueba sólo se autoriza si coinciden la URL HTTPS *.netlify.app y el Project ID, además de la clave. robots.txt solicita no indexar el sitio mientras BOOKING_TEST_MODE=true.
 
+Una vez publicado, en **Data & Storage → Database → Database branches → View/edit**, deben aparecer `reservations` y `reservation_nights`. La base empieza vacía; aparecerá una fila en `reservations` después de tu primera reserva de prueba.
+
 ## 3. Comprobar la web antes de conectar feeds a anuncios
 
-1. Abre https://SITIO.netlify.app/api/availability/domo-romantico y el mismo endpoint para domo-amplio. Ambos deben devolver status ready. Si devuelven error, revisa los cuatro iCal de entrada y DATABASE_URL.
+1. Abre https://SITIO.netlify.app/api/availability/domo-romantico y el mismo endpoint para domo-amplio. Ambos deben devolver status ready. Si devuelven error, revisa los cuatro iCal de entrada, que la base esté creada y que la migración haya finalizado.
 2. Abre https://SITIO.netlify.app/api/calendar/domo-romantico/TOKEN_ROMANTICO/calendar.ics y el equivalente de domo-amplio. Deben responder HTTP 200 con BEGIN:VCALENDAR y tipo text/calendar. Un token erróneo da 404.
 3. En /reservar, elige noches futuras libres, completa datos de prueba y pega BOOKING_TEST_SECRET **sólo en el formulario**. Debe confirmarse sin ir a Tilopay. Guarda la URL de estado y el ID.
 4. Comprueba que esas noches aparecen ocupadas en la web y que el feed .ics contiene un VEVENT; DTSTART es llegada y DTEND es salida exclusiva. Otra reserva de la misma noche debe ser rechazada.
@@ -67,4 +70,4 @@ iCal se consulta periódicamente: **no garantiza sincronización inmediata ni au
 
 Cancela todas las reservas de prueba, verifica que las noches se liberaron en Airbnb y Expedia y elimina de los anuncios el feed de pruebas si no se usará permanentemente. No elimines la base ni los tokens antes de verificar la liberación. Mantén TILOPAY_CHECKOUT_ENABLED=false en la web pública hasta probar por separado pagos, correo y conflictos.
 
-Referencias: [Netlify CLI deploy](https://cli.netlify.com/commands/deploy/), [Netlify Functions y variables](https://docs.netlify.com/build/functions/environment-variables/), [Netlify funciones programadas](https://docs.netlify.com/build/functions/scheduled-functions/), [Airbnb importar calendarios](https://www.airbnb.com/help/article/99).
+Referencias: [Netlify Database](https://docs.netlify.com/build/data-and-storage/netlify-database/getting-started/), [migraciones automáticas](https://docs.netlify.com/build/data-and-storage/netlify-database/migrations/), [Netlify CLI deploy](https://cli.netlify.com/commands/deploy/), [Netlify Functions y variables](https://docs.netlify.com/build/functions/environment-variables/), [Netlify funciones programadas](https://docs.netlify.com/build/functions/scheduled-functions/), [Airbnb importar calendarios](https://www.airbnb.com/help/article/99).
