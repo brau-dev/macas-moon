@@ -76,6 +76,16 @@ El iCal de salida no lleva token ni datos personales; quien conozca su URL puede
 
 iCal funciona mediante consultas periódicas. **No garantiza actualización instantánea ni elimina por completo el riesgo de reservas dobles entre plataformas.** Esta prueba sirve para medir los retrasos reales. Si el riesgo no es aceptable, no actives el cobro automático con iCal.
 
+## Escaneo de secretos durante el deploy
+
+El proyecto mantiene activo el escaneo de secretos de Netlify. En `netlify.toml`, dentro de `[build.environment]`, `SECRETS_SCAN_OMIT_KEYS` excluye únicamente configuraciones públicas: `BOOKING_ACTIVE_DOMES`, `BOOKING_CURRENCY`, `BOOKING_ENABLED`, `NEXT_PUBLIC_BOOKING_TEST_MODE`, `TILOPAY_CHECKOUT_ENABLED`, `BOOKING_RECONCILE_ENABLED`, `PRICE_DOMO_AMPLIO_CENTS` y `PRICE_DOMO_ROMANTICO_CENTS`. Sus valores pueden aparecer legítimamente en el código, la documentación o la web; no son credenciales.
+
+Las claves privadas de prueba, los enlaces iCal de entrada y las credenciales de pagos, correo y base de datos no están excluidos. Mantén esos valores en las variables de entorno de Netlify; los archivos `.env` locales ya están ignorados por Git. No añadas secretos a `NEXT_PUBLIC_*`, a esta lista de exclusiones ni a archivos versionados.
+
+Si el deploy vuelve a fallar, revisa las líneas anteriores al resumen del error: identifican las variables y los archivos detectados. El resumen por sí solo no identifica el secreto. Si aparece una credencial real, elimínala del archivo o del contenido generado, rótala y coordina la limpieza del historial si llegó a versionarse. No desactives el escaneo ni excluyas carpetas completas para evitar el bloqueo.
+
+Referencia: [configuración del escaneo de secretos de Netlify](https://docs.netlify.com/build/environment-variables/secrets-scanning/).
+
 ## Después de probar
 
 Cancela las reservas de prueba y verifica que las noches se liberaron en Airbnb y Expedia. Si el feed de pruebas no se usará permanentemente, quítalo de ambos anuncios del amplio después de comprobar la liberación. Mantén Tilopay desactivado en la web pública hasta probar aparte pagos, correo y conflictos.
