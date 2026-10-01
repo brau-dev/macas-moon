@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDome } from "@/data/domes";
+import { isDomeActive } from "@/lib/active-domes";
 import { getCombinedAvailability } from "@/lib/combined-availability";
 
 export const runtime = "nodejs";
@@ -7,7 +8,7 @@ export const dynamic = "force-dynamic";
 
 export async function GET(_request: Request, context: { params: Promise<{ dome: string }> }) {
   const { dome } = await context.params;
-  if (!getDome(dome)) return NextResponse.json({ error: "Unknown dome" }, { status: 404 });
+  if (!getDome(dome) || !isDomeActive(dome)) return NextResponse.json({ error: "Unknown dome" }, { status: 404 });
   try {
     const result = await getCombinedAvailability(dome);
     return NextResponse.json(result, { headers: { "Cache-Control": "no-store" } });

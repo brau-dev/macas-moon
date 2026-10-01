@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
 import { reconcilePayment } from "@/lib/reservation-service";
+import { getSiteOrigin } from "@/lib/site-origin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(_request: Request, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
-  const siteUrl = process.env.BOOKING_SITE_URL;
+  const siteUrl = getSiteOrigin();
   if (!/^[a-f0-9-]{36}$/.test(id) || !siteUrl) {
     return NextResponse.json({ error: "Retorno inválido" }, { status: 400 });
   }

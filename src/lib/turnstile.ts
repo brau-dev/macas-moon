@@ -1,8 +1,9 @@
 import { BookingError } from "@/lib/booking-error";
+import { getSiteOrigin } from "@/lib/site-origin";
 
 export async function verifyBookingChallenge(token: unknown) {
   const secret = process.env.TURNSTILE_SECRET_KEY;
-  const siteUrl = process.env.BOOKING_SITE_URL;
+  const siteUrl = getSiteOrigin();
   if (!secret || !siteUrl) throw new BookingError("Protección del checkout no configurada.", 503);
   if (typeof token !== "string" || !token || token.length > 2048) {
     throw new BookingError("Completa la verificación de seguridad.", 400);

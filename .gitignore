@@ -35,6 +35,9 @@ yarn-error.log*
 .env.*
 !.env.example
 
+# netlify local project link
+/.netlify/
+
 # vercel
 .vercel
 

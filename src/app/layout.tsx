@@ -6,10 +6,8 @@ import { WhatsAppButton } from "@/components/layout/WhatsAppButton";
 import { LanguageProvider } from "@/i18n/LanguageProvider";
 import { JsonLd } from "@/components/seo/JsonLd";
 import { websiteJsonLd } from "@/lib/jsonLd";
-import { site } from "@/lib/site";
+import { site, siteUrl } from "@/lib/site";
 import "./globals.css";
-
-const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://www.macasmoon.com";
 
 const lora = Lora({
   subsets: ["latin"],

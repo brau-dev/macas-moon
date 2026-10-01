@@ -10,17 +10,13 @@ function isAllowedOrigin(requestOrigin: string) {
         (request.hostname === "localhost" || request.hostname === "127.0.0.1");
     }
 
-    const stagingUrl = new URL(process.env.BOOKING_TEST_SITE_URL ?? "");
-    const bookingUrl = new URL(process.env.BOOKING_SITE_URL ?? "");
-    return process.env.BOOKING_TEST_MODE === "true" &&
-      process.env.BOOKING_TEST_SITE_ID !== undefined &&
-      process.env.BOOKING_TEST_SITE_ID.length > 0 &&
-      process.env.BOOKING_TEST_SITE_ID === process.env.SITE_ID &&
+    const stagingUrl = new URL(process.env.URL ?? "");
+    return process.env.NEXT_PUBLIC_BOOKING_TEST_MODE === "true" &&
+      Boolean(process.env.SITE_ID) &&
       request.protocol === "https:" &&
       stagingUrl.protocol === "https:" &&
       stagingUrl.hostname.endsWith(".netlify.app") &&
-      request.origin === stagingUrl.origin &&
-      bookingUrl.origin === stagingUrl.origin;
+      request.origin === stagingUrl.origin;
   } catch {
     return false;
   }

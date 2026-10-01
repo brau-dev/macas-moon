@@ -20,6 +20,7 @@ function nights(start: string, end: string) {
 export function DirectBookingForm({ initialDome }: { initialDome?: string }) {
   const router = useRouter();
   const { t } = useLanguage();
+  const testMode = process.env.NEXT_PUBLIC_BOOKING_TEST_MODE === "true";
   const validDome = domes.some((item) => item.slug === initialDome);
   const [dome, setDome] = useState(validDome ? initialDome! : "");
   const [checkIn, setCheckIn] = useState("");
@@ -35,12 +36,16 @@ export function DirectBookingForm({ initialDome }: { initialDome?: string }) {
       .then((value) => setPricing(value)).catch(() => setPricing(null));
   }, []);
 
+  const activeDome = (pricing?.perNight[dome] ?? 0) > 0
+    ? dome
+    : (domes.find((item) => (pricing?.perNight[item.slug] ?? 0) > 0)?.slug ?? "");
+
   useEffect(() => {
-    if (!dome) return;
+    if (!activeDome) return;
     let live = true;
     async function refresh() {
       try {
-        const response = await fetch(`/api/availability/${dome}`, { cache: "no-store" });
+        const response = await fetch(`/api/availability/${activeDome}`, { cache: "no-store" });
         if (!response.ok) throw new Error("Availability failed");
         const value = await response.json() as AvailabilityResponse;
         if (live) setAvailability(value);
@@ -51,11 +56,12 @@ export function DirectBookingForm({ initialDome }: { initialDome?: string }) {
     refresh();
     const timer = window.setInterval(refresh, 60_000);
     return () => { live = false; window.clearInterval(timer); };
-  }, [dome]);
+  }, [activeDome]);
 
-  const selected = domes.find((item) => item.slug === dome);
-  const amountCents = checkIn && checkOut && pricing && dome
-    ? Math.max(0, nights(checkIn, checkOut)) * (pricing.perNight[dome] ?? 0) : 0;
+  const selected = domes.find((item) => item.slug === activeDome);
+  const bookableDomes = domes.filter((item) => (pricing?.perNight[item.slug] ?? 0) > 0);
+  const amountCents = checkIn && checkOut && pricing && activeDome
+    ? Math.max(0, nights(checkIn, checkOut)) * (pricing.perNight[activeDome] ?? 0) : 0;
   const amount = pricing && amountCents > 0
     ? new Intl.NumberFormat("es-CR", { style: "currency", currency: pricing.currency }).format(amountCents / 100)
     : null;
@@ -72,9 +78,10 @@ export function DirectBookingForm({ initialDome }: { initialDome?: string }) {
       return;
     }
     if (!pricing || !amountCents) { setError("No se pudo calcular el precio."); return; }
+    if (testMode && !testSecret) { setError("Introduce la clave de prueba."); return; }
     const form = new FormData(event.currentTarget);
     const payload = {
-      dome, checkIn, checkOut, expectedAmountCents: amountCents,
+      dome: activeDome, checkIn, checkOut, expectedAmountCents: amountCents,
       turnstileToken: form.get("cf-turnstile-response"),
       guests: Number(form.get("guests")),
       name: form.get("name"), email: form.get("email"), phone: form.get("phone"),
@@ -85,7 +92,7 @@ export function DirectBookingForm({ initialDome }: { initialDome?: string }) {
     try {
       const response = await fetch("/api/reservations", {
         method: "POST", headers: { "Content-Type": "application/json",
-          ...(process.env.NEXT_PUBLIC_BOOKING_TEST_MODE === "true" && testSecret
+          ...(testMode && testSecret
             ? { "x-booking-test-secret": testSecret } : {}) },
         body: JSON.stringify(payload),
       });
@@ -103,14 +110,14 @@ export function DirectBookingForm({ initialDome }: { initialDome?: string }) {
 
   return <form onSubmit={submit} className="space-y-6">
     <label className="block text-sm font-medium text-ink">{t("Domo seleccionado")}
-      <select required value={dome} onChange={(event) => {
+      <select required value={activeDome} onChange={(event) => {
         setDome(event.target.value); setCheckIn(""); setCheckOut(""); setAvailability(null);
       }} className={field}>
         <option value="">{t("Elige un domo")}</option>
-        {domes.map((item) => <option key={item.slug} value={item.slug}>{t(item.name)}</option>)}
+        {bookableDomes.map((item) => <option key={item.slug} value={item.slug}>{t(item.name)}</option>)}
       </select>
     </label>
-    {dome ? <AvailabilityCalendar availability={availability} checkIn={checkIn} checkOut={checkOut}
+    {activeDome ? <AvailabilityCalendar availability={availability} checkIn={checkIn} checkOut={checkOut}
       onSelect={(arrival, departure) => { setCheckIn(arrival); setCheckOut(departure); setError(""); }} /> : null}
     <div className="grid gap-4 sm:grid-cols-2">
       <label className="text-sm font-medium text-ink">{t("Fecha de llegada")}
@@ -131,7 +138,9 @@ export function DirectBookingForm({ initialDome }: { initialDome?: string }) {
       <label className="text-sm font-medium text-ink">{t("Teléfono")}
         <input required type="tel" name="phone" autoComplete="tel" maxLength={25} className={field} /></label>
     </div>
-    <p className="text-sm text-muted">Datos de facturación requeridos por la pasarela de pago:</p>
+    <p className="text-sm text-muted">{testMode
+      ? "Datos de la persona que realiza la reserva de prueba (no se hará ningún cobro):"
+      : "Datos de facturación requeridos por la pasarela de pago:"}</p>
     <label className="block text-sm font-medium text-ink">Dirección
       <input required name="address" autoComplete="street-address" maxLength={150} className={field} /></label>
     <div className="grid gap-4 sm:grid-cols-2">
@@ -145,21 +154,23 @@ export function DirectBookingForm({ initialDome }: { initialDome?: string }) {
         <input required name="country" autoComplete="country" defaultValue="CR" maxLength={2} className={field} /></label>
     </div>
     {amount ? <p className="rounded-2xl bg-sand-50 p-4 text-sm text-ink">
-      {nights(checkIn, checkOut)} noches · Total a pagar: <strong>{amount}</strong>
+      {nights(checkIn, checkOut)} noches · {testMode ? "Tarifa de referencia (no se cobra):" : "Total a pagar:"} <strong>{amount}</strong>
     </p> : <p className="text-sm text-muted">Selecciona las fechas para ver el precio final.</p>}
-    <p className="text-xs leading-relaxed text-muted">La reserva se confirma únicamente tras verificar el pago. Las plataformas externas actualizan sus calendarios iCal periódicamente, por lo que existe un riesgo residual de cruce de reservas.</p>
-    {process.env.NEXT_PUBLIC_BOOKING_TEST_MODE === "true" ? <label className="block text-sm font-medium text-ink">
+    <p className="text-xs leading-relaxed text-muted">{testMode
+      ? "La reserva de prueba se confirma sin pago y aparece en el iCal de salida. Airbnb y Expedia consultan ese calendario periódicamente, por lo que persiste un riesgo de cruce de reservas."
+      : "La reserva se confirma únicamente tras verificar el pago. Las plataformas externas actualizan sus calendarios iCal periódicamente, por lo que existe un riesgo residual de cruce de reservas."}</p>
+    {testMode ? <label className="block text-sm font-medium text-ink">
       Clave de prueba (sin cobro)
       <input type="password" autoComplete="off" value={testSecret} onChange={(event) => setTestSecret(event.target.value)} className={field} />
     </label> : null}
-    {process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ? <>
+    {!testMode && process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ? <>
       <Script src="https://challenges.cloudflare.com/turnstile/v0/api.js" strategy="afterInteractive" />
       <div className="cf-turnstile" data-sitekey={process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY}
         data-action="booking" />
     </> : null}
     {error ? <p role="alert" className="text-sm text-red-700">{error}</p> : null}
-    <Button type="submit" size="lg" className="w-full" disabled={busy || !amount || availability?.status !== "ready"}>
-      {busy ? "Procesando…" : testSecret ? "Confirmar reserva de prueba" : "Continuar al pago seguro"}
+    <Button type="submit" size="lg" className="w-full" disabled={busy || !amount || availability?.status !== "ready" || (testMode && !testSecret)}>
+      {busy ? "Procesando…" : testMode ? "Confirmar reserva de prueba (sin cobro)" : "Continuar al pago seguro"}
     </Button>
   </form>;
 }

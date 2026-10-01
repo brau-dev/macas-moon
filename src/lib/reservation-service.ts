@@ -2,8 +2,10 @@ import { randomUUID } from "node:crypto";
 import { BookingError } from "@/lib/booking-error";
 import { verifyBookingChallenge } from "@/lib/turnstile";
 import { testSecretAuthorized } from "@/lib/test-mode";
+import { getSiteOrigin } from "@/lib/site-origin";
 export { BookingError } from "@/lib/booking-error";
 import { getDome } from "@/data/domes";
+import { isDomeActive } from "@/lib/active-domes";
 import { getCombinedAvailability } from "@/lib/combined-availability";
 import { overlapsBlocked } from "@/lib/availability-types";
 import { createBooking, getBooking, confirmBooking, expireBooking, type Booking } from "@/lib/booking-db";
@@ -76,6 +78,7 @@ export async function startReservation(raw: unknown, testSecret: string | null, 
     throw new BookingError("Pagos en línea aún no habilitados.", 503);
   }
   const input = validate(raw);
+  if (!isDomeActive(input.dome)) throw new BookingError("Este domo no admite reservas en esta prueba.", 503);
   if (!test) await verifyBookingChallenge((raw as Record<string, unknown>).turnstileToken);
   const availability = await getCombinedAvailability(input.dome, true);
   if (availability.status !== "ready") throw new BookingError("No se pudo verificar toda la disponibilidad. Intenta más tarde.", 503);
@@ -89,8 +92,8 @@ export async function startReservation(raw: unknown, testSecret: string | null, 
   if (!Number.isSafeInteger(amount) || Number((raw as Record<string, unknown>).expectedAmountCents) !== amount) {
     throw new BookingError("El precio cambió. Actualiza la página antes de continuar.", 409);
   }
-  const siteUrl = process.env.BOOKING_SITE_URL;
-  if (!test && (!siteUrl || !/^https:\/\//.test(siteUrl))) {
+  const siteUrl = getSiteOrigin();
+  if (!test && !siteUrl) {
     throw new BookingError("URL de pagos no configurada.", 503);
   }
   const booking: Omit<Booking, "status" | "expires_at" | "confirmation_email_sent_at"> = {
@@ -117,7 +120,7 @@ export async function startReservation(raw: unknown, testSecret: string | null, 
   const saved = await getBooking(id);
   if (!saved) throw new Error("Booking disappeared after creation");
   try {
-    const paymentUrl = await createPaymentUrl(saved, siteUrl!.replace(/\/$/, ""));
+    const paymentUrl = await createPaymentUrl(saved, siteUrl!);
     return { id, status: "pending" as const, paymentUrl, amountCents: amount, currency };
   } catch (error) {
     await expireBooking(id);

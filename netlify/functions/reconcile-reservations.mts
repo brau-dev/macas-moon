@@ -2,7 +2,7 @@ async function reconcileReservations() {
   if (process.env.BOOKING_RECONCILE_ENABLED !== "true") {
     return new Response(null, { status: 204 });
   }
-  const siteUrl = process.env.BOOKING_SITE_URL;
+  const siteUrl = process.env.URL;
   const secret = process.env.BOOKING_RECONCILE_SECRET;
   if (!siteUrl || !secret) throw new Error("Booking reconciliation is not configured");
   const response = await fetch(`${siteUrl.replace(/\/$/, "")}/api/internal/reconcile`, {
