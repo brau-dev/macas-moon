@@ -22,6 +22,8 @@ export default async function ReservarPage({ searchParams }: {
         <p className="mt-4 max-w-md text-[0.98rem] leading-relaxed text-muted">
           {process.env.NEXT_PUBLIC_BOOKING_TEST_MODE === "true"
             ? "Sitio de pruebas: elige noches libres y completa tus datos. Con la clave de prueba confirmarás la reserva sin realizar un pago. Las noches confirmadas aparecerán en el calendario iCal de salida."
+            : process.env.TILOPAY_EXPECTED_ENVIRONMENT === "Test"
+            ? "Pruebas de pago: elige tus noches y completa tus datos para ir a Tilopay. No uses tarjetas reales hasta comprobar que la cuenta de comercio está en modo de prueba. La reserva solo se confirma tras verificar la transacción."
             : "Consulta el calendario, elige tus noches y completa tus datos. Te llevaremos a Tilopay para pagar con tarjeta o las billeteras disponibles en tu dispositivo. Confirmaremos la reserva al verificar el pago."}
         </p>
         {domo && isDomeActive(domo) && getDome(domo) ? <p className="mt-6 text-sm text-olive-800">Seleccionado: {getDome(domo)?.name}</p> : null}

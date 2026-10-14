@@ -4,35 +4,46 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "check:netlify-env": "node scripts/check-netlify-staging-env.mjs"
+    "check:netlify-env": "node scripts/check-netlify-staging-env.mjs",
+    "admin:password": "node scripts/hash-admin-password.mjs",
+    "audit:exposure": "node scripts/audit-exposure.mjs",
+    "media:privacy": "node scripts/sanitize-public-media.mjs",
+    "check:local-http": "node scripts/check-local-http.mjs",
+    "check:smtp": "node scripts/check-smtp.mjs",
+    "test": "node --import tsx tests/reservations.test.ts"
   },
   "dependencies": {
     "@netlify/database": "^2.0.1",
     "clsx": "^2.1.1",
+    "libphonenumber-js": "^1.13.11",
     "lucide-react": "^1.31.0",
-    "next": "^16.3.6",
+    "next": "^16.3.8",
+    "nodemailer": "^10.1.1",
     "pg": "^8.23.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "react-phone-number-input": "^3.4.17",
-    "resend": "^6.30.0",
+    "server-only": "^0.0.1",
     "tailwind-merge": "^3.6.0"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.2.17",
     "@netlify/plugin-nextjs": "^5.15.13",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
+    "@types/nodemailer": "^8.0.2",
     "@types/pg": "^8.23.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "^16.3.6",
-    "sharp": "^0.35.4",
+    "eslint-config-next": "^16.3.8",
+    "sharp": "^0.35.5",
     "tailwindcss": "^4",
+    "tsx": "^4.23.15",
     "typescript": "^5"
   }
 }

@@ -1,3 +1,4 @@
+import "server-only";
 import { Pool, type PoolClient } from "pg";
 import type { OccupiedRange } from "@/lib/availability-types";
 
@@ -27,18 +28,32 @@ export type Booking = {
   status: "pending" | "confirmed" | "expired" | "cancelled";
   amount_cents: number;
   currency: string;
-  payment_provider: "tilopay" | "test";
+  payment_provider: "tilopay" | "test" | "manual";
   payment_reference: string | null;
+  kind: "booking" | "manual";
+  admin_note: string;
+  payment_link_id: string | null;
+  payment_link_closed_at: Date | null;
+  payment_issue: string | null;
+  payment_checked_at: Date | null;
   expires_at: Date | null;
   confirmation_email_sent_at: Date | null;
+  owner_notification_sent_at: Date | null;
+  owner_notification_required: boolean;
 };
 
-const columns = `id, dome, check_in::text, check_out::text, guests, guest_name, guest_email,
+export const bookingColumns = `id, dome, check_in::text, check_out::text, guests, guest_name, guest_email,
   guest_phone, billing_address, billing_city, billing_state, billing_postal_code,
   billing_country, status, amount_cents, currency, payment_provider,
-  payment_reference, expires_at, confirmation_email_sent_at`;
+  payment_reference, expires_at, confirmation_email_sent_at, kind, admin_note,
+  payment_link_id, payment_link_closed_at, payment_issue, payment_checked_at,
+  owner_notification_sent_at, owner_notification_required`;
 
-async function transaction<T>(run: (client: PoolClient) => Promise<T>) {
+export type NewBooking = Pick<Booking, "id" | "dome" | "check_in" | "check_out" | "guests" |
+  "guest_name" | "guest_email" | "guest_phone" | "billing_country" | "amount_cents" |
+  "currency" | "payment_provider" | "payment_reference">;
+
+export async function transaction<T>(run: (client: PoolClient) => Promise<T>) {
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
@@ -53,25 +68,28 @@ async function transaction<T>(run: (client: PoolClient) => Promise<T>) {
   }
 }
 
-export async function createBooking(booking: Omit<Booking, "status" | "expires_at" | "confirmation_email_sent_at">) {
+export async function releaseExpiredNights(client: PoolClient) {
+  const expired = await client.query<{ id: string }>(`UPDATE reservations
+    SET status = 'expired' WHERE status = 'pending' AND expires_at <= now() RETURNING id`);
+  if (expired.rows.length) {
+    await client.query("DELETE FROM reservation_nights WHERE reservation_id = ANY($1::uuid[])",
+      [expired.rows.map((row) => row.id)]);
+  }
+}
+
+export async function createBooking(booking: NewBooking) {
   return transaction(async (client) => {
     // Marking expired locks the reservation rows. A simultaneous confirmation
     // cannot later lose its unique night rows during cleanup.
-    const expired = await client.query<{ id: string }>(`UPDATE reservations
-      SET status = 'expired' WHERE status = 'pending' AND expires_at < now() RETURNING id`);
-    if (expired.rows.length) {
-      await client.query("DELETE FROM reservation_nights WHERE reservation_id = ANY($1::uuid[])",
-        [expired.rows.map((row) => row.id)]);
-    }
+    await releaseExpiredNights(client);
     await client.query(`INSERT INTO reservations
       (id, dome, check_in, check_out, guests, guest_name, guest_email, guest_phone,
-       billing_address, billing_city, billing_state, billing_postal_code, billing_country,
+       billing_country,
        status, amount_cents, currency, payment_provider, payment_reference, expires_at)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'pending',$14,$15,$16,$17,now() + interval '30 minutes')`,
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending',$10,$11,$12,$13,now() + interval '30 minutes')`,
       [booking.id, booking.dome, booking.check_in, booking.check_out, booking.guests,
         booking.guest_name, booking.guest_email, booking.guest_phone,
-        booking.billing_address, booking.billing_city, booking.billing_state,
-        booking.billing_postal_code, booking.billing_country, booking.amount_cents,
+        booking.billing_country, booking.amount_cents,
         booking.currency, booking.payment_provider, booking.payment_reference]);
     await client.query(`INSERT INTO reservation_nights (reservation_id, dome, night)
       SELECT $1, $2, day::date FROM generate_series($3::date, $4::date - 1, interval '1 day') day`,
@@ -80,7 +98,7 @@ export async function createBooking(booking: Omit<Booking, "status" | "expires_a
 }
 
 export async function getBooking(id: string): Promise<Booking | null> {
-  const result = await getPool().query<Booking>(`SELECT ${columns} FROM reservations WHERE id = $1`, [id]);
+  const result = await getPool().query<Booking>(`SELECT ${bookingColumns} FROM reservations WHERE id = $1`, [id]);
   return result.rows[0] ?? null;
 }
 
@@ -88,8 +106,17 @@ export async function confirmBooking(id: string) {
   const result = await getPool().query<Booking>(`UPDATE reservations
     SET status = 'confirmed', confirmed_at = now(), expires_at = NULL
     WHERE id = $1 AND status = 'pending' AND expires_at > now()
-    RETURNING ${columns}`, [id]);
+    RETURNING ${bookingColumns}`, [id]);
   return result.rows[0] ?? null;
+}
+
+export async function savePaymentLink(id: string, linkId: string) {
+  await getPool().query("UPDATE reservations SET payment_link_id = $2 WHERE id = $1 AND status = 'pending'", [id, linkId]);
+}
+
+export async function recordPaymentCheck(id: string, issue: string | null = null) {
+  await getPool().query(`UPDATE reservations SET payment_checked_at = now(),
+    payment_issue = COALESCE($2, payment_issue) WHERE id = $1`, [id, issue]);
 }
 
 export async function expireBooking(id: string) {

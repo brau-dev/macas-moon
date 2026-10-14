@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { validReservationId } from "@/lib/booking-validation";
 
 type Status = { id: string; status: string; dome: string; checkIn: string; checkOut: string;
   amountCents: number; currency: string; emailSent: boolean; testMode: boolean };
@@ -12,22 +13,36 @@ export function BookingStatus() {
   const [error, setError] = useState("");
   const [testSecret, setTestSecret] = useState("");
   const [cancelling, setCancelling] = useState(false);
+  const [refreshVersion, setRefreshVersion] = useState(0);
 
   useEffect(() => {
-    if (!id || !/^[a-f0-9-]{36}$/.test(id)) return;
+    if (!id || !validReservationId(id)) return;
     let live = true;
+    let done = false;
+    let inFlight = false;
+    let attempts = 0;
+    let timer: number | undefined;
+    const controller = new AbortController();
     async function refresh() {
+      if (!live || done || document.hidden || inFlight || attempts >= 30) return;
+      if (timer !== undefined) window.clearTimeout(timer);
+      inFlight = true;
+      attempts++;
       try {
-        const response = await fetch(`/api/reservations/${id}`, { cache: "no-store" });
+        const response = await fetch(`/api/reservations/${id}`, { cache: "no-store", signal: controller.signal });
         if (!response.ok) throw new Error("No se pudo verificar el estado del pago.");
         const result = await response.json() as Status;
-        if (live) { setStatus(result); setError(""); }
+        if (live) { setStatus(result); setError(""); done = result.status !== "pending"; }
       } catch (reason) { if (live) setError(reason instanceof Error ? reason.message : "Error desconocido"); }
+      finally {
+        inFlight = false;
+        if (live && !done && !document.hidden && attempts < 30) timer = window.setTimeout(refresh, 10_000);
+      }
     }
     refresh();
-    const timer = window.setInterval(refresh, 10_000);
-    return () => { live = false; window.clearInterval(timer); };
-  }, [id]);
+    document.addEventListener("visibilitychange", refresh);
+    return () => { live = false; controller.abort(); window.clearTimeout(timer); document.removeEventListener("visibilitychange", refresh); };
+  }, [id, refreshVersion]);
 
   async function cancelTest() {
     if (!id || cancelling) return;
@@ -49,19 +64,23 @@ export function BookingStatus() {
   return <div className="rounded-3xl border border-border-soft bg-warm-white p-6 shadow-soft sm:p-10">
     <h1 className="heading-section text-ink">Estado de tu reserva</h1>
     {!id ? <p className="mt-4 text-muted">No se proporcionó un número de reserva.</p> : null}
+    {id && !validReservationId(id) ? <p role="alert" className="mt-4 text-red-700">El número de reserva no es válido.</p> : null}
     {error ? <p role="alert" className="mt-4 text-red-700">{error}</p> : null}
-    {!status && id ? <p className="mt-4 text-muted">Verificando el pago…</p> : null}
+    {id ? <button type="button" onClick={() => setRefreshVersion((value) => value + 1)}
+      className="mt-4 text-sm font-medium text-olive-800 underline">Actualizar estado</button> : null}
+    {!status && id && validReservationId(id) ? <p className="mt-4 text-muted">Verificando el pago…</p> : null}
     {status ? <div className="mt-6 space-y-3 text-sm text-ink">
       <p><strong>Reserva:</strong> {status.id}</p>
       <p><strong>Domo:</strong> {status.dome}</p>
       <p><strong>Estadía:</strong> {status.checkIn} al {status.checkOut}</p>
-      <p><strong>{status.testMode ? "Prueba sin cobro. Tarifa simulada:" : "Total pagado:"}</strong> {amount}</p>
+      <p><strong>{status.testMode ? "Prueba sin cobro. Tarifa simulada:" : status.status === "confirmed" ? "Total pagado:" : "Importe de la reserva:"}</strong> {amount}</p>
       {status.status === "confirmed" ? <p className="rounded-2xl bg-olive-50 p-4 font-medium text-olive-800">
         Reserva confirmada. {status.emailSent ? "Enviamos los detalles por correo." : "El correo de confirmación está pendiente; conserva este número de reserva."}
       </p> : status.status === "pending" ? <p className="rounded-2xl bg-sand-50 p-4">
         Pago aún no verificado. No consideres esta reserva confirmada hasta que cambie el estado.
       </p> : status.status === "cancelled" ? <p className="rounded-2xl bg-sand-50 p-4">
         Reserva de prueba cancelada; las noches se liberaron en esta web y desaparecerán del iCal de salida.
+        Expedia puede conservar el bloqueo; el administrador deberá comprobarlo y reabrir las noches manualmente si corresponde.
       </p> : <p className="rounded-2xl bg-sand-50 p-4">
         El bloqueo de esta reserva expiró. Si se realizó un cargo, contacta al alojamiento con tu número de reserva.
       </p>}

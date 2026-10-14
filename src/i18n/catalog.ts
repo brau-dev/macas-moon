@@ -5,6 +5,9 @@ export type Translation = {
 };
 
 export const catalog: Record<string, Translation> = {
+  "País de residencia": { en: "Country of residence", fr: "Pays de résidence", de: "Wohnsitzland" },
+  "Selecciona tu país": { en: "Select your country", fr: "Sélectionnez votre pays", de: "Wählen Sie Ihr Land" },
+  "Al reservar en línea, el pago se realiza en la página segura de Tilopay con los métodos habilitados para el comercio y tu dispositivo. La reserva se confirma después de verificar el pago.": { en: "When booking online, payment is made on Tilopay's secure page using the methods enabled for the merchant and your device. The reservation is confirmed after payment is verified.", fr: "Pour une réservation en ligne, le paiement s’effectue sur la page sécurisée de Tilopay avec les moyens disponibles pour le commerçant et votre appareil. La réservation est confirmée après vérification du paiement.", de: "Bei einer Online-Buchung erfolgt die Zahlung auf der sicheren Tilopay-Seite mit den für den Händler und Ihr Gerät verfügbaren Zahlungsarten. Die Buchung wird nach Überprüfung der Zahlung bestätigt." },
   "Domos": { en: "Domes", fr: "Dômes", de: "Domos" },
   "Inicio": { en: "Home", fr: "Accueil", de: "Startseite" },
   "Nosotros": { en: "About us", fr: "À propos", de: "Über uns" },

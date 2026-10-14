@@ -1,3 +1,4 @@
+import "server-only";
 import { randomUUID } from "node:crypto";
 import { BookingError } from "@/lib/booking-error";
 import { verifyBookingChallenge } from "@/lib/turnstile";
@@ -8,29 +9,20 @@ import { getDome } from "@/data/domes";
 import { isDomeActive } from "@/lib/active-domes";
 import { getCombinedAvailability } from "@/lib/combined-availability";
 import { overlapsBlocked } from "@/lib/availability-types";
-import { createBooking, getBooking, confirmBooking, expireBooking, type Booking } from "@/lib/booking-db";
-import { nightsBetween, todayInCostaRica } from "@/lib/date-range";
+import { createBooking, getBooking, confirmBooking, expireBooking, recordPaymentCheck, type NewBooking } from "@/lib/booking-db";
+import { nightsBetween } from "@/lib/date-range";
 import { createPaymentUrl, paymentApproved } from "@/lib/tilopay";
 import { sendConfirmation } from "@/lib/booking-email";
+import { cleanField as clean, validateStay } from "@/lib/booking-validation";
+import { isResidenceCountry } from "@/lib/countries";
+import { requireCheckoutConfig } from "@/lib/checkout-config";
+import { logServerError } from "@/lib/safe-log";
 
 type BookingInput = {
   dome: string; checkIn: string; checkOut: string; guests: number;
   name: string; email: string; phone: string;
-  address: string; city: string; state: string; postalCode: string; country: string;
+  country: string;
 };
-
-function validDate(value: string) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-  const date = new Date(`${value}T00:00:00Z`);
-  return !Number.isNaN(date.valueOf()) && date.toISOString().slice(0, 10) === value;
-}
-
-function clean(value: unknown, max: number) {
-  if (typeof value !== "string") throw new BookingError("Datos de reserva incompletos.", 400);
-  const trimmed = value.trim();
-  if (!trimmed || trimmed.length > max) throw new BookingError("Datos de reserva inválidos.", 400);
-  return trimmed;
-}
 
 function validate(input: unknown): BookingInput {
   if (!input || typeof input !== "object") throw new BookingError("Datos de reserva inválidos.", 400);
@@ -40,23 +32,19 @@ function validate(input: unknown): BookingInput {
   if (!selected) throw new BookingError("Domo desconocido.", 400);
   const checkIn = clean(value.checkIn, 10);
   const checkOut = clean(value.checkOut, 10);
-  if (!validDate(checkIn) || !validDate(checkOut) || checkIn <= todayInCostaRica() ||
-    nightsBetween(checkIn, checkOut) < 1 || nightsBetween(checkIn, checkOut) > 30) {
-    throw new BookingError("Fechas inválidas.", 400);
-  }
+  validateStay(checkIn, checkOut);
   const guests = Number(value.guests);
   if (!Number.isInteger(guests) || guests < 1 || guests > selected.capacity) {
     throw new BookingError("Número de huéspedes inválido.", 400);
   }
   const email = clean(value.email, 254);
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new BookingError("Correo inválido.", 400);
+  if (!/^[^\s<>@,;]+@[^\s<>@,;]+\.[^\s<>@,;]+$/.test(email)) throw new BookingError("Correo inválido.", 400);
   const country = clean(value.country, 2).toUpperCase();
-  if (!/^[A-Z]{2}$/.test(country)) throw new BookingError("País inválido.", 400);
+  if (!isResidenceCountry(country)) throw new BookingError("País de residencia inválido.", 400);
   return {
     dome, checkIn, checkOut, guests,
     name: clean(value.name, 100), email, phone: clean(value.phone, 25),
-    address: clean(value.address, 150), city: clean(value.city, 80),
-    state: clean(value.state, 50), postalCode: clean(value.postalCode, 20), country,
+    country,
   };
 }
 
@@ -77,6 +65,7 @@ export async function startReservation(raw: unknown, testSecret: string | null, 
   } else if (process.env.TILOPAY_CHECKOUT_ENABLED !== "true") {
     throw new BookingError("Pagos en línea aún no habilitados.", 503);
   }
+  if (!test) requireCheckoutConfig();
   const input = validate(raw);
   if (!isDomeActive(input.dome)) throw new BookingError("Este domo no admite reservas en esta prueba.", 503);
   if (!test) await verifyBookingChallenge((raw as Record<string, unknown>).turnstileToken);
@@ -96,11 +85,10 @@ export async function startReservation(raw: unknown, testSecret: string | null, 
   if (!test && !siteUrl) {
     throw new BookingError("URL de pagos no configurada.", 503);
   }
-  const booking: Omit<Booking, "status" | "expires_at" | "confirmation_email_sent_at"> = {
+  const booking: NewBooking = {
     id, dome: input.dome, check_in: input.checkIn, check_out: input.checkOut,
     guests: input.guests, guest_name: input.name, guest_email: input.email,
-    guest_phone: input.phone, billing_address: input.address, billing_city: input.city,
-    billing_state: input.state, billing_postal_code: input.postalCode, billing_country: input.country,
+    guest_phone: input.phone, billing_country: input.country,
     amount_cents: amount, currency, payment_provider: test ? "test" : "tilopay",
     payment_reference: test ? null : `MM${id.replaceAll("-", "").toUpperCase()}`,
   };
@@ -114,7 +102,7 @@ export async function startReservation(raw: unknown, testSecret: string | null, 
   if (test) {
     const confirmed = await confirmBooking(id);
     if (!confirmed) throw new BookingError("No se pudo confirmar la prueba.", 500);
-    try { await sendConfirmation(confirmed); } catch (error) { console.error(error); }
+    try { await sendConfirmation(confirmed); } catch (error) { logServerError("Confirmation email failed", error); }
     return { id, status: "confirmed" as const, amountCents: 0, currency };
   }
   const saved = await getBooking(id);
@@ -133,16 +121,30 @@ export async function reconcilePayment(id: string) {
   if (!booking) throw new BookingError("Reserva desconocida.", 404);
   if (booking.status === "confirmed") return booking;
   if (booking.payment_provider !== "tilopay") return booking;
-  if (!await paymentApproved(booking)) return booking;
+  // Timestamp failed checks too, so one failing row cannot starve reconciliation.
+  await recordPaymentCheck(id);
+  const approved = await paymentApproved(booking);
+  if (!approved) {
+    if (booking.status === "pending" && booking.expires_at && booking.expires_at.valueOf() <= Date.now()) {
+      await expireBooking(id);
+      return (await getBooking(id))!;
+    }
+    return booking;
+  }
   if (booking.status !== "pending") {
+    await recordPaymentCheck(id, "Pago aprobado sin bloqueo vigente. Revisar disponibilidad y gestionar reembolso; no confirmar automáticamente.");
     throw new BookingError("Pago aprobado tras vencer el bloqueo; requiere reembolso o gestión inmediata.", 409);
   }
   const confirmed = await confirmBooking(id);
   if (!confirmed) {
     const current = await getBooking(id);
     if (current?.status === "confirmed") return current;
+    await expireBooking(id);
+    await recordPaymentCheck(id, "Pago aprobado después del vencimiento. Requiere gestión inmediata y posible reembolso.");
     throw new BookingError("Pago aprobado tras vencer el bloqueo; requiere reembolso o gestión inmediata.", 409);
   }
-  try { await sendConfirmation(confirmed); } catch (error) { console.error(error); }
-  return confirmed;
+  try { await sendConfirmation(confirmed); } catch (error) { logServerError("Confirmation email failed", error); }
+  // Email markers change after confirmation. Return fresh state so the first
+  // payment-status response does not report a successfully sent email as pending.
+  return (await getBooking(id)) ?? confirmed;
 }

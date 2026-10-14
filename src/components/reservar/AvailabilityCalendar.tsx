@@ -6,6 +6,7 @@ import type { AvailabilityResponse } from "@/lib/availability-types";
 import { overlapsBlocked } from "@/lib/availability-types";
 import { useLanguage } from "@/i18n/LanguageProvider";
 import { cn } from "@/lib/cn";
+import { todayInCostaRica } from "@/lib/date-range";
 
 function iso(year: number, month: number, day: number) {
   return `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
@@ -35,7 +36,7 @@ export function AvailabilityCalendar({ availability, checkIn, checkOut, onSelect
   const days = new Date(year, monthIndex + 1, 0).getDate();
   const leading = (new Date(year, monthIndex, 1).getDay() + 6) % 7;
   const now = new Date();
-  const today = iso(now.getFullYear(), now.getMonth(), now.getDate());
+  const today = todayInCostaRica();
   const locale = language === "es" ? "es-CR" : language;
   const ready = availability?.status === "ready";
   const blocked = availability?.blocked ?? [];

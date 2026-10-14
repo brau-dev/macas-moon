@@ -10,7 +10,7 @@ export const faqItems = [
   {
     question: "¿Qué métodos de pago aceptan?",
     answer:
-      "Por ahora no procesamos pagos en esta página. Escríbenos por WhatsApp para consultar los métodos de pago disponibles y confirmar tu reserva.",
+      "Al reservar en línea, el pago se realiza en la página segura de Tilopay con los métodos habilitados para el comercio y tu dispositivo. La reserva se confirma después de verificar el pago.",
   },
   {
     question: "¿Cuál es la política de cancelación y reembolso?",

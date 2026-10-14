@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { getDome } from "@/data/domes";
 import { isDomeActive } from "@/lib/active-domes";
 import { getPool } from "@/lib/booking-db";
+import { logServerError } from "@/lib/safe-log";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,7 +27,7 @@ export async function GET(_request: Request, context: { params: Promise<{ dome: 
       "X-Robots-Tag": "noindex, nofollow",
     } });
   } catch (error) {
-    console.error("iCal export failed", error);
+    logServerError("iCal export failed", error);
     return new Response(null, { status: 503 });
   }
 }

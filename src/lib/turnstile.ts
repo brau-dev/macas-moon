@@ -1,3 +1,4 @@
+import "server-only";
 import { BookingError } from "@/lib/booking-error";
 import { getSiteOrigin } from "@/lib/site-origin";
 

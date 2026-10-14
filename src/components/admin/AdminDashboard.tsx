@@ -1,0 +1,235 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { ChevronLeft, ChevronRight, LogOut, RefreshCw } from "lucide-react";
+import { addDays, todayInCostaRica } from "@/lib/date-range";
+import { cn } from "@/lib/cn";
+import type { CalendarSource } from "@/lib/ical";
+
+type Reservation = { id: string; dome: string; checkIn: string; checkOut: string; kind: "booking" | "manual";
+  status: "pending" | "confirmed" | "cancelled" | "expired"; name: string; email: string; phone: string;
+  country: string; guests: number; amountCents: number; currency: string; provider: string; note: string;
+  expiresAt: string | null; emailSent: boolean; ownerEmailRequired: boolean; ownerEmailSent: boolean; paymentIssue: string | null };
+type Calendar = { reservations: Reservation[]; imported: CalendarSource[]; issues: Reservation[]; checkedAt: string };
+
+const active = (row: Reservation) => row.status === "confirmed" ||
+  (row.status === "pending" && Boolean(row.expiresAt && new Date(row.expiresAt).valueOf() > Date.now()));
+const overlaps = (start: string, end: string, day: string) => start <= day && day < end;
+const statusLabels = { pending: "Pago pendiente", confirmed: "Confirmada", expired: "Vencida", cancelled: "Cancelada" };
+const field = "mt-2 w-full rounded-xl border border-border bg-warm-white px-3 py-2.5";
+const actionClass = "rounded-xl border border-border bg-warm-white px-3 py-2 text-sm font-medium hover:bg-sand-100 disabled:opacity-50";
+
+function moveMonth(month: string, delta: number) {
+  const date = new Date(`${month}-01T12:00:00Z`);
+  date.setUTCMonth(date.getUTCMonth() + delta);
+  return date.toISOString().slice(0, 7);
+}
+
+export function AdminDashboard({ domes, checkout }: { domes: Array<{ slug: string; name: string }>;
+  checkout: { enabled: boolean; freeTest: boolean; environment: string; missing: string[]; emailMissing: string[] } }) {
+  const router = useRouter();
+  const [dome, setDome] = useState(domes[0]?.slug ?? "");
+  const [month, setMonth] = useState(() => todayInCostaRica().slice(0, 7));
+  const [calendar, setCalendar] = useState<Calendar | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [checkIn, setCheckIn] = useState("");
+  const [checkOut, setCheckOut] = useState("");
+  const [selectedDay, setSelectedDay] = useState("");
+  const start = `${month}-01`;
+  const end = `${moveMonth(month, 1)}-01`;
+  const days = Math.round((Date.parse(end) - Date.parse(start)) / 86_400_000);
+  const leading = (new Date(`${start}T12:00:00Z`).getUTCDay() + 6) % 7;
+
+  const refresh = useCallback(async (force = false, signal?: AbortSignal) => {
+    if (!dome) return;
+    try {
+      const query = new URLSearchParams({ dome, start, end, refresh: String(force) });
+      const response = await fetch(`/api/admin/calendar?${query}`, { cache: "no-store", signal });
+      if (response.status === 401) { router.replace("/admin/login"); return; }
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? "No se pudo consultar el calendario.");
+      if (!signal?.aborted) { setCalendar(result); setError(""); }
+    } catch (reason) {
+      if (!signal?.aborted) setError(reason instanceof Error ? reason.message : "Error de conexión.");
+    } finally { if (!signal?.aborted) setLoading(false); }
+  }, [dome, start, end, router]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const initial = window.setTimeout(() => refresh(false, controller.signal), 0);
+    const visible = () => { if (!document.hidden) refresh(false, controller.signal); };
+    document.addEventListener("visibilitychange", visible);
+    return () => { controller.abort(); window.clearTimeout(initial); document.removeEventListener("visibilitychange", visible); };
+  }, [refresh]);
+
+  async function mutate(url: string, method: string, body?: object, success?: string) {
+    if (busy) return;
+    setBusy(true); setError(""); setMessage("");
+    try {
+      const response = await fetch(url, { method, headers: { "Content-Type": "application/json" },
+        body: body ? JSON.stringify(body) : undefined });
+      if (response.status === 401) { router.replace("/admin/login"); return; }
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? "No se pudo completar la operación.");
+      setMessage(success ?? result.warning ?? "Operación completada.");
+      await refresh(true);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "Error de conexión."); }
+    finally { setBusy(false); }
+  }
+
+  async function block(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const fields = new FormData(event.currentTarget);
+    await mutate("/api/admin/blocks", "POST", { dome, checkIn, checkOut, note: fields.get("note") },
+      "Bloqueo creado y publicado en nuestro iCal. Airbnb y Expedia lo importarán según sus propios tiempos.");
+  }
+
+  async function logout() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const response = await fetch("/api/admin/logout", { method: "POST" });
+      if (!response.ok) throw new Error("No se pudo cerrar la sesión.");
+      router.replace("/admin/login"); router.refresh();
+    } catch { setError("No se pudo cerrar la sesión. Intenta de nuevo."); setBusy(false); }
+  }
+
+  const rows = calendar?.reservations ?? [];
+  const visible = selectedDay ? rows.filter((row) => overlaps(row.checkIn, row.checkOut, selectedDay)) : rows;
+  return <div className="mx-auto max-w-7xl px-4 py-6 sm:px-8 sm:py-10">
+    <section className="mb-5 rounded-2xl border border-border bg-warm-white p-4 text-sm">
+      <p className="font-medium">Pagos: {checkout.freeTest ? "Pruebas gratuitas" : checkout.enabled ? `Tilopay (${checkout.environment})` : "Desactivados"}</p>
+      {!checkout.freeTest && checkout.missing.length ? <p className="mt-2 text-amber-900">Falta configurar: {checkout.missing.join(", ")}. No se iniciarán pagos hasta completarlo.</p> : null}
+      {checkout.emailMissing.length ? <p className="mt-2 text-amber-900">Correo pendiente de configurar: {checkout.emailMissing.join(", ")}. Esto no anula reservas pagadas; los envíos quedan pendientes para reintento.</p> : null}
+      <p className="mt-2 text-xs text-muted">Estas opciones no verifican la cuenta de comercio. La activación real y las billeteras deben comprobarse con Tilopay.</p>
+    </section>
+    <header className="flex flex-wrap items-center justify-between gap-4">
+      <div><p className="eyebrow text-olive-700">Macas Moon · Panel privado</p>
+        <h1 className="mt-2 font-serif text-3xl text-ink">Reservas y disponibilidad</h1></div>
+      <button onClick={logout} disabled={busy} className={cn(actionClass, "inline-flex items-center gap-2")}>
+        <LogOut size={16} /> Cerrar sesión</button>
+    </header>
+    <aside className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm leading-relaxed text-amber-950">
+      <strong>Importante: reaperturas en Expedia.</strong> En las pruebas, Expedia conservó bloqueos después de quitarlos en la web o Airbnb.
+      Tras cancelar una prueba o quitar un bloqueo, revisa Expedia y reabre manualmente solo las noches sin otra reserva válida.
+      Después actualiza el calendario de Expedia importado en Airbnb y comprueba esta web. No desconectes los enlaces para forzar una actualización.
+      iCal no elimina el riesgo de reservas dobles entre plataformas.
+    </aside>
+    {error ? <p role="alert" className="mt-4 rounded-xl bg-red-50 p-4 text-red-800">{error}</p> : null}
+    {message ? <p role="status" className="mt-4 rounded-xl bg-olive-50 p-4 text-sm text-olive-900">{message}</p> : null}
+    {calendar?.issues.length ? <section className="mt-5 rounded-2xl border border-red-200 bg-red-50 p-4">
+      <h2 className="font-semibold text-red-900">Pagos que requieren atención</h2>
+      {calendar.issues.map((row) => <p key={row.id} className="mt-2 text-sm text-red-800">
+        {row.id} · {row.name} · {row.checkIn} → {row.checkOut}: {row.paymentIssue}</p>)}
+    </section> : null}
+    <div className="mt-6 flex flex-wrap items-end gap-4">
+      <label className="text-sm font-medium">Domo<select value={dome} onChange={(event) => {
+        setDome(event.target.value); setCalendar(null); setLoading(true); setSelectedDay(""); setCheckIn(""); setCheckOut("");
+      }} className={field}>{domes.map((item) => <option key={item.slug} value={item.slug}>{item.name}</option>)}</select></label>
+      <label className="text-sm font-medium">Mes<input type="month" value={month} onChange={(event) => {
+        if (event.target.value) { setMonth(event.target.value); setCalendar(null); setLoading(true); setSelectedDay(""); }
+      }} className={field} /></label>
+      <button disabled={loading || busy} onClick={() => { setLoading(true); refresh(true); }} className={cn(actionClass, "inline-flex items-center gap-2")}>
+        <RefreshCw size={16} /> {loading ? "Consultando…" : "Actualizar desde Airbnb y Expedia"}</button>
+    </div>
+    {!domes.length ? <p className="mt-5">No hay domos habilitados. Revisa BOOKING_ACTIVE_DOMES.</p> : null}
+    <div className="mt-4 grid gap-3 sm:grid-cols-2">
+      {calendar?.imported.map((source) => <p key={source.name} className="rounded-xl border border-border bg-warm-white p-3 text-sm">
+        <strong>{source.name}:</strong> {source.status === "ready" ? "Calendario leído" : source.status === "unconfigured" ? "Enlace no configurado" : "Error de lectura"}
+        {source.checkedAt ? <span className="mt-1 block text-xs text-muted">Consulta: {new Date(source.checkedAt).toLocaleString("es-CR")}</span> : null}
+      </p>)}
+    </div>
+    <div className="mt-5 grid items-start gap-6 lg:grid-cols-[1.5fr_1fr]">
+      <section aria-label="Calendario administrativo" className="rounded-2xl border border-border bg-warm-white p-4 sm:p-6">
+        <div className="mb-4 flex items-center justify-between">
+          <button aria-label="Mes anterior" className={actionClass} onClick={() => { setMonth(moveMonth(month, -1)); setCalendar(null); setLoading(true); setSelectedDay(""); }}><ChevronLeft size={18} /></button>
+          <h2 className="font-semibold capitalize">{new Date(`${start}T12:00:00Z`).toLocaleDateString("es-CR", { month: "long", year: "numeric", timeZone: "UTC" })}</h2>
+          <button aria-label="Mes siguiente" className={actionClass} onClick={() => { setMonth(moveMonth(month, 1)); setCalendar(null); setLoading(true); setSelectedDay(""); }}><ChevronRight size={18} /></button>
+        </div>
+        <div className="grid grid-cols-7 gap-1">
+          {["lun", "mar", "mié", "jue", "vie", "sáb", "dom"].map((label) => <span key={label} className="py-2 text-center text-xs text-muted">{label}</span>)}
+          {Array.from({ length: leading }, (_, index) => <span key={`empty-${index}`} />)}
+          {Array.from({ length: days }, (_, index) => {
+            const day = `${month}-${String(index + 1).padStart(2, "0")}`;
+            const local = rows.filter((row) => active(row) && overlaps(row.checkIn, row.checkOut, day));
+            const sources = calendar?.imported.filter((source) => source.blocked.some((range) => overlaps(range.start, range.end, day))) ?? [];
+            const occupied = local.length > 0 || sources.length > 0;
+            const verified = calendar?.imported.every((source) => source.status === "ready");
+            const selected = checkIn && checkOut ? checkIn <= day && day < checkOut : checkIn === day;
+            const labels = [...local.map((row) => row.kind === "manual" ? "Bloqueo manual" : row.status === "pending" ? "Pago pendiente" : "Reserva web"), ...sources.map((source) => source.name)];
+            return <button type="button" key={day} disabled={!calendar || busy} aria-label={`${day}: ${labels.join(", ") || (verified ? "Disponible" : "Sin verificar")}`}
+              onClick={() => {
+                setSelectedDay(day);
+                if (!occupied && day >= todayInCostaRica()) {
+                  if (!checkIn || checkOut || day <= checkIn) { setCheckIn(day); setCheckOut(""); }
+                  else setCheckOut(day);
+                }
+              }} className={cn("min-h-16 rounded-xl border border-transparent p-1 text-center text-sm sm:min-h-20",
+                occupied ? "bg-sand-100" : verified ? "bg-olive-50" : "bg-sand-50 text-muted",
+                selected && "border-olive-600", selectedDay === day && "ring-2 ring-olive-600")}>
+              <span className="font-medium">{index + 1}</span>
+              <span className="mt-1 flex flex-wrap justify-center gap-1">
+                {local.some((row) => row.kind === "manual") ? <span title="Manual" className="h-2 w-2 rounded-full bg-purple-500" /> : null}
+                {local.some((row) => row.kind === "booking" && row.status === "confirmed") ? <span title="Reserva web" className="h-2 w-2 rounded-full bg-olive-700" /> : null}
+                {local.some((row) => row.status === "pending") ? <span title="Pago pendiente" className="h-2 w-2 rounded-full bg-amber-500" /> : null}
+                {sources.map((source) => <span key={source.name} title={source.name} className={cn("h-2 w-2 rounded-full", source.name === "Airbnb" ? "bg-rose-500" : "bg-blue-500")} />)}
+              </span>
+            </button>;
+          })}
+        </div>
+        <p className="mt-4 text-xs leading-relaxed text-muted">Verde: reserva web · Morado: bloqueo manual · Ámbar: pago pendiente · Rosa: Airbnb · Azul: Expedia.</p>
+        <p className="mt-2 text-xs text-muted">Una noche puede aparecer en varios feeds por la sincronización. Los colores indican qué calendario la exporta, no necesariamente dónde se originó.</p>
+      </section>
+      <form onSubmit={block} className="space-y-4 rounded-2xl border border-border bg-warm-white p-5">
+        <h2 className="font-serif text-xl">Bloquear noches manualmente</h2>
+        <p className="text-xs leading-relaxed text-muted">El último día es la salida y no se bloquea. Para bloquear una noche, elige ese día y el siguiente. Máximo 365 noches.</p>
+        <label className="block text-sm font-medium">Desde (primera noche)
+          <input required type="date" min={todayInCostaRica()} value={checkIn} onChange={(event) => { setCheckIn(event.target.value); setCheckOut(""); }} className={field} /></label>
+        <label className="block text-sm font-medium">Hasta (día de salida)
+          <input required type="date" min={checkIn ? addDays(checkIn, 1) : todayInCostaRica()} value={checkOut} onChange={(event) => setCheckOut(event.target.value)} className={field} /></label>
+        <label className="block text-sm font-medium">Motivo privado
+          <input required name="note" maxLength={300} placeholder="Mantenimiento, uso de los dueños…" className={field} /></label>
+        <button disabled={busy || loading || !dome || !checkIn || checkOut <= checkIn} className="w-full rounded-xl bg-olive-700 p-3 text-sm font-semibold text-white disabled:opacity-50">
+          {busy ? "Guardando…" : "Crear bloqueo"}</button>
+        <p className="text-xs text-muted">El motivo y los datos de huéspedes nunca aparecen en el iCal público.</p>
+      </form>
+    </div>
+    <section className="mt-7">
+      <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="font-serif text-2xl">Reservas y bloqueos {selectedDay ? `del ${selectedDay}` : "del mes"}</h2>
+        {selectedDay ? <button className={actionClass} onClick={() => setSelectedDay("")}>Ver todo el mes</button> : null}</div>
+      <p className="mt-2 text-sm text-muted">Los datos de huéspedes corresponden a reservas de esta web. iCal solo aporta noches ocupadas de los otros canales.</p>
+      <div className="mt-4 space-y-3">
+        {visible.map((row) => <article key={row.id} className="rounded-2xl border border-border bg-warm-white p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div><h3 className="font-semibold">{row.kind === "manual" ? "Bloqueo manual" : row.name} · {statusLabels[row.status]}</h3>
+              <p className="mt-1 text-sm">{row.checkIn} → {row.checkOut} {row.provider === "test" ? "· Prueba sin cobro" : ""}</p>
+              {row.kind === "manual" ? <p className="mt-2 text-sm text-muted">Motivo: {row.note}</p> : <>
+                <p className="mt-2 break-all text-sm text-muted">{row.email} · {row.phone} · País: {row.country} · {row.guests} huéspedes</p>
+                <p className="mt-1 text-sm">{new Intl.NumberFormat("es-CR", { style: "currency", currency: row.currency }).format(row.amountCents / 100)}
+                  {row.provider === "test" ? " (referencia, no cobrado)" : row.status === "confirmed" ? " · Pago verificado" : " · Importe de la reserva"}
+                  {row.status === "confirmed" ? row.emailSent ? " · Correo al huésped enviado" : " · Correo al huésped pendiente" : ""}</p>
+                {row.status === "confirmed" && row.ownerEmailRequired ? <p className="mt-1 text-sm text-muted">
+                  Aviso a los dueños: {row.ownerEmailSent ? "enviado" : "pendiente"}</p> : null}
+              </>}
+              <p className="mt-2 break-all text-xs text-muted">ID: {row.id}</p></div>
+            <div className="flex flex-wrap gap-2">
+              {row.kind === "manual" && row.status === "confirmed" ? <button className={actionClass} disabled={busy} onClick={() => {
+                if (window.confirm("¿Quitar este bloqueo? Luego debes comprobar la reapertura en Expedia.")) mutate(`/api/admin/blocks/${row.id}`, "DELETE");
+              }}>Quitar bloqueo</button> : null}
+              {row.provider === "test" && row.status === "confirmed" ? <button className={actionClass} disabled={busy} onClick={() => {
+                if (window.confirm("¿Cancelar esta reserva de prueba? Comprueba después Expedia.")) mutate(`/api/admin/reservations/${row.id}`, "POST", { action: "cancel-test" }, "Prueba cancelada. Verifica Expedia y reabre manualmente si el bloqueo persiste.");
+              }}>Cancelar prueba</button> : null}
+              {row.provider === "tilopay" && row.status !== "confirmed" ? <button className={actionClass} disabled={busy} onClick={() => mutate(`/api/admin/reservations/${row.id}`, "POST", { action: "reconcile" })}>Verificar pago</button> : null}
+              {row.kind === "booking" && row.status === "confirmed" && (!row.emailSent || (row.ownerEmailRequired && !row.ownerEmailSent)) ? <button className={actionClass} disabled={busy} onClick={() => mutate(`/api/admin/reservations/${row.id}`, "POST", { action: "retry-email" })}>Reintentar correos pendientes</button> : null}
+            </div>
+          </div>
+        </article>)}
+        {!visible.length && !loading ? <p className="rounded-xl bg-warm-white p-4 text-sm text-muted">No hay reservas ni bloqueos locales en este período. Los bloqueos importados se muestran en el calendario superior.</p> : null}
+      </div>
+    </section>
+  </div>;
+}

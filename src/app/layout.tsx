@@ -1,8 +1,6 @@
 import type { Metadata } from "next";
 import { Lora, Nunito_Sans } from "next/font/google";
-import { Footer } from "@/components/layout/Footer";
-import { Navbar } from "@/components/layout/Navbar";
-import { WhatsAppButton } from "@/components/layout/WhatsAppButton";
+import { SiteChrome } from "@/components/layout/SiteChrome";
 import { LanguageProvider } from "@/i18n/LanguageProvider";
 import { JsonLd } from "@/components/seo/JsonLd";
 import { websiteJsonLd } from "@/lib/jsonLd";
@@ -61,12 +59,7 @@ export default function RootLayout({
       <body className="flex min-h-full flex-col bg-warm-white font-sans text-main antialiased">
         <JsonLd data={websiteJsonLd()} />
         <LanguageProvider>
-          <Navbar />
-          <main id="contenido" className="flex-1">
-            {children}
-          </main>
-          <Footer />
-          <WhatsAppButton />
+          <SiteChrome>{children}</SiteChrome>
         </LanguageProvider>
       </body>
     </html>

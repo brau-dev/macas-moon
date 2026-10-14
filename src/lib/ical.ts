@@ -1,3 +1,5 @@
+import "server-only";
+import { readBoundedText } from "@/lib/request-body";
 import type { AvailabilityResponse, OccupiedRange } from "@/lib/availability-types";
 
 const CACHE_MS = 5 * 60 * 1000;
@@ -7,7 +9,9 @@ const URLS: Record<string, Array<string | undefined>> = {
   "domo-amplio": [process.env.ICAL_DOMO_AMPLIO_AIRBNB_URL, process.env.ICAL_DOMO_AMPLIO_EXPEDIA_URL],
 };
 
-const cache = new Map<string, { expires: number; result: AvailabilityResponse }>();
+export type CalendarSource = { name: "Airbnb" | "Expedia"; status: "ready" | "error" | "unconfigured";
+  blocked: OccupiedRange[]; checkedAt: string | null };
+const cache = new Map<string, { expires: number; result: AvailabilityResponse; sources: CalendarSource[] }>();
 
 function isoDate(raw: string) {
   if (!/^\d{8}$/.test(raw)) throw new Error("Invalid iCal date");
@@ -94,30 +98,46 @@ async function readCalendar(rawUrl: string) {
   if (!response.ok || Number(response.headers.get("content-length")) > MAX_BYTES) {
     throw new Error("Calendar unavailable");
   }
-  const body = await response.text();
-  if (body.length > MAX_BYTES) throw new Error("Calendar too large");
+  const body = await readBoundedText(response.body, MAX_BYTES);
   return parseIcal(body);
 }
 
-export async function getAvailability(dome: string, forceRefresh = false): Promise<AvailabilityResponse> {
+async function loadCalendars(dome: string, forceRefresh: boolean) {
   const urls = URLS[dome];
   if (!urls) throw new Error("Unknown dome");
   const configured = urls.map((url) => url?.trim()).filter((url): url is string => Boolean(url));
-  if (!configured.length) return { status: "unconfigured", blocked: [], checkedAt: null };
-  if (new Set(configured).size !== configured.length) return { status: "error", blocked: [], checkedAt: null };
   const existing = cache.get(dome);
-  if (!forceRefresh && existing && existing.expires > Date.now()) return existing.result;
+  if (!forceRefresh && existing && existing.expires > Date.now()) return existing;
 
-  const feeds = await Promise.allSettled(configured.map(readCalendar));
-  const successful = feeds.filter((feed): feed is PromiseFulfilledResult<OccupiedRange[]> => feed.status === "fulfilled");
-  const status: AvailabilityResponse["status"] = successful.length === 0
-    ? "error"
-    : successful.length === urls.length ? "ready" : "partial";
+  const allConfigured = Object.values(URLS).flat().map((url) => url?.trim()).filter(Boolean);
+  const duplicate = configured.some((url) => allConfigured.filter((value) => value === url).length > 1);
+  const sources: CalendarSource[] = await Promise.all(urls.map(async (url, index) => {
+    const name = index === 0 ? "Airbnb" as const : "Expedia" as const;
+    if (!url?.trim()) return { name, status: "unconfigured" as const, blocked: [], checkedAt: null };
+    try {
+      if (duplicate) throw new Error("Duplicate calendar URL");
+      return { name, status: "ready" as const, blocked: await readCalendar(url.trim()), checkedAt: new Date().toISOString() };
+    } catch {
+      return { name, status: "error" as const, blocked: [], checkedAt: new Date().toISOString() };
+    }
+  }));
+  const successful = sources.filter((source) => source.status === "ready");
+  const status: AvailabilityResponse["status"] = !configured.length ? "unconfigured" : duplicate || !successful.length
+    ? "error" : successful.length === urls.length ? "ready" : "partial";
   const result: AvailabilityResponse = {
     status,
-    blocked: mergeRanges(successful.flatMap((feed) => feed.value)),
+    blocked: mergeRanges(successful.flatMap((feed) => feed.blocked)),
     checkedAt: new Date().toISOString(),
   };
-  cache.set(dome, { expires: Date.now() + CACHE_MS, result });
-  return result;
+  const entry = { expires: Date.now() + CACHE_MS, result, sources };
+  cache.set(dome, entry);
+  return entry;
+}
+
+export async function getAvailability(dome: string, forceRefresh = false): Promise<AvailabilityResponse> {
+  return (await loadCalendars(dome, forceRefresh)).result;
+}
+
+export async function getCalendarSources(dome: string, forceRefresh = false) {
+  return (await loadCalendars(dome, forceRefresh)).sources;
 }

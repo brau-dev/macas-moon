@@ -23,6 +23,7 @@ function isAllowedOrigin(requestOrigin: string) {
 }
 
 export function testSecretAuthorized(requestOrigin: string, supplied: string | null) {
+  if (process.env.NEXT_PUBLIC_BOOKING_TEST_MODE !== "true") return false;
   const expected = process.env.BOOKING_TEST_SECRET;
   if (!isAllowedOrigin(requestOrigin) || !expected || !/^[A-Za-z0-9_-]{24,}$/.test(expected) ||
     supplied === null || !/^[A-Za-z0-9_-]+$/.test(supplied) || supplied.length !== expected.length) return false;

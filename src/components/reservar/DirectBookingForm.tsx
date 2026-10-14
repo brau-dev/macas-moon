@@ -10,6 +10,7 @@ import type { AvailabilityResponse } from "@/lib/availability-types";
 import { overlapsBlocked } from "@/lib/availability-types";
 import { addDays, todayInCostaRica } from "@/lib/date-range";
 import { useLanguage } from "@/i18n/LanguageProvider";
+import { residenceCountries } from "@/lib/countries";
 
 type Pricing = { currency: string; perNight: Record<string, number> };
 
@@ -19,7 +20,10 @@ function nights(start: string, end: string) {
 
 export function DirectBookingForm({ initialDome }: { initialDome?: string }) {
   const router = useRouter();
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
+  const countryNames = new Intl.DisplayNames([language], { type: "region" });
+  const countries = residenceCountries.map((code) => ({ code, name: countryNames.of(code) ?? code }))
+    .sort((a, b) => a.name.localeCompare(b.name, language));
   const testMode = process.env.NEXT_PUBLIC_BOOKING_TEST_MODE === "true";
   const validDome = domes.some((item) => item.slug === initialDome);
   const [dome, setDome] = useState(validDome ? initialDome! : "");
@@ -30,6 +34,7 @@ export function DirectBookingForm({ initialDome }: { initialDome?: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [testSecret, setTestSecret] = useState("");
+  const [refreshVersion, setRefreshVersion] = useState(0);
 
   useEffect(() => {
     fetch("/api/pricing", { cache: "no-store" }).then((response) => response.ok ? response.json() : null)
@@ -43,20 +48,24 @@ export function DirectBookingForm({ initialDome }: { initialDome?: string }) {
   useEffect(() => {
     if (!activeDome) return;
     let live = true;
+    let inFlight = false;
+    const controller = new AbortController();
     async function refresh() {
+      if (document.hidden || inFlight) return;
+      inFlight = true;
       try {
-        const response = await fetch(`/api/availability/${activeDome}`, { cache: "no-store" });
+        const response = await fetch(`/api/availability/${activeDome}`, { cache: "no-store", signal: controller.signal });
         if (!response.ok) throw new Error("Availability failed");
         const value = await response.json() as AvailabilityResponse;
         if (live) setAvailability(value);
       } catch {
         if (live) setAvailability({ status: "error", blocked: [], checkedAt: null });
-      }
+      } finally { inFlight = false; }
     }
     refresh();
-    const timer = window.setInterval(refresh, 60_000);
-    return () => { live = false; window.clearInterval(timer); };
-  }, [activeDome]);
+    document.addEventListener("visibilitychange", refresh);
+    return () => { live = false; controller.abort(); document.removeEventListener("visibilitychange", refresh); };
+  }, [activeDome, refreshVersion]);
 
   const selected = domes.find((item) => item.slug === activeDome);
   const bookableDomes = domes.filter((item) => (pricing?.perNight[item.slug] ?? 0) > 0);
@@ -85,8 +94,7 @@ export function DirectBookingForm({ initialDome }: { initialDome?: string }) {
       turnstileToken: form.get("cf-turnstile-response"),
       guests: Number(form.get("guests")),
       name: form.get("name"), email: form.get("email"), phone: form.get("phone"),
-      address: form.get("address"), city: form.get("city"), state: form.get("state"),
-      postalCode: form.get("postalCode"), country: form.get("country"),
+      country: form.get("country"),
     };
     setBusy(true);
     try {
@@ -119,6 +127,8 @@ export function DirectBookingForm({ initialDome }: { initialDome?: string }) {
     </label>
     {activeDome ? <AvailabilityCalendar availability={availability} checkIn={checkIn} checkOut={checkOut}
       onSelect={(arrival, departure) => { setCheckIn(arrival); setCheckOut(departure); setError(""); }} /> : null}
+    {activeDome ? <button type="button" disabled={busy} onClick={() => setRefreshVersion((value) => value + 1)}
+      className="text-sm font-medium text-olive-800 underline disabled:opacity-50">Actualizar disponibilidad</button> : null}
     <div className="grid gap-4 sm:grid-cols-2">
       <label className="text-sm font-medium text-ink">{t("Fecha de llegada")}
         <input required type="date" min={tomorrow} value={checkIn} onChange={(event) => {
@@ -138,21 +148,12 @@ export function DirectBookingForm({ initialDome }: { initialDome?: string }) {
       <label className="text-sm font-medium text-ink">{t("Teléfono")}
         <input required type="tel" name="phone" autoComplete="tel" maxLength={25} className={field} /></label>
     </div>
-    <p className="text-sm text-muted">{testMode
-      ? "Datos de la persona que realiza la reserva de prueba (no se hará ningún cobro):"
-      : "Datos de facturación requeridos por la pasarela de pago:"}</p>
-    <label className="block text-sm font-medium text-ink">Dirección
-      <input required name="address" autoComplete="street-address" maxLength={150} className={field} /></label>
-    <div className="grid gap-4 sm:grid-cols-2">
-      <label className="text-sm font-medium text-ink">Ciudad
-        <input required name="city" autoComplete="address-level2" maxLength={80} className={field} /></label>
-      <label className="text-sm font-medium text-ink">Provincia / estado
-        <input required name="state" autoComplete="address-level1" maxLength={50} className={field} /></label>
-      <label className="text-sm font-medium text-ink">Código postal
-        <input required name="postalCode" autoComplete="postal-code" maxLength={20} className={field} /></label>
-      <label className="text-sm font-medium text-ink">País (código de dos letras)
-        <input required name="country" autoComplete="country" defaultValue="CR" maxLength={2} className={field} /></label>
-    </div>
+    <label className="block text-sm font-medium text-ink">{t("País de residencia")}
+      <select required name="country" autoComplete="country" defaultValue="" className={field}>
+        <option value="">{t("Selecciona tu país")}</option>
+        {countries.map(({ code, name }) => <option key={code} value={code}>{name}</option>)}
+      </select>
+    </label>
     {amount ? <p className="rounded-2xl bg-sand-50 p-4 text-sm text-ink">
       {nights(checkIn, checkOut)} noches · {testMode ? "Tarifa de referencia (no se cobra):" : "Total a pagar:"} <strong>{amount}</strong>
     </p> : <p className="text-sm text-muted">Selecciona las fechas para ver el precio final.</p>}

@@ -14,4 +14,5 @@ async function reconcileReservations() {
 
 export default reconcileReservations;
 
-export const config = { schedule: "*/2 * * * *" };
+// Webhook and return verify immediately; this is a fallback, not iCal polling.
+export const config = { schedule: "*/15 * * * *" };

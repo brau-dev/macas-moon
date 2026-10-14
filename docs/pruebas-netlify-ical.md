@@ -1,6 +1,13 @@
 # Prueba de reservas e iCal: solo domo amplio
 
+**Esta guía describe las pruebas sin pago.** El archivo privado `.env.netlify` ahora está
+preparado para exigir pago. Para usar ese modo y configurar administrador, sigue
+[deploy-reservas-con-pago.md](deploy-reservas-con-pago.md); no sustituyas sus indicadores
+por los valores gratuitos de esta guía. Se conserva aquí el procedimiento alternativo iCal.
+
 Esta prueba se hace en **otro sitio de Netlify**, sin conectar `macasmoon.com` ni activar cobros. Solo se habilita `domo-amplio`: el romántico sigue visible en el catálogo, pero no se puede reservar en este sitio de pruebas. No cambies su sincronización actual en Airbnb o Expedia.
+
+**Panel privado y pagos:** consulta [panel-admin-y-pagos.md](panel-admin-y-pagos.md) para configurar `/admin`, su usuario y contraseña, la segunda migración y las pruebas de Tilopay. El formulario ahora pide únicamente país de residencia, no dirección. Las pruebas sin cobro se conservan.
 
 ## 1. Sitio y base de pruebas
 
@@ -25,7 +32,7 @@ Las variables son líneas `NOMBRE=valor`. El archivo local [`.env.netlify`](../.
 | iCal de entrada | `ICAL_DOMO_AMPLIO_AIRBNB_URL`, `ICAL_DOMO_AMPLIO_EXPEDIA_URL` |
 | Funciones apagadas | `TILOPAY_CHECKOUT_ENABLED=false`, `BOOKING_RECONCILE_ENABLED=false` |
 
-Son **10 variables necesarias**; pueden ser 11 si conservaste el precio del romántico. `BOOKING_TEST_SECRET` no es un token de iCal: es la clave que introducirás en el formulario para confirmar reservas de prueba **sin pagar**. Netlify proporciona `URL`, `SITE_ID` y `NETLIFY_DB_URL`; no los copies en el archivo. Sin `RESEND_API_KEY` y `BOOKING_EMAIL_FROM`, la reserva se confirma pero no se envía correo.
+Son **10 variables necesarias**; pueden ser 11 si conservaste el precio del romántico. `BOOKING_TEST_SECRET` no es un token de iCal: es la clave que introducirás en el formulario para confirmar reservas de prueba **sin pagar**. Netlify proporciona `URL`, `SITE_ID` y `NETLIFY_DB_URL`; no los copies en el archivo. Sin `SMTP_USER` y `SMTP_PASSWORD`, la reserva se confirma pero no se envía correo.
 
 ## 3. Comprobar y desplegar una sola vez
 
@@ -50,7 +57,7 @@ Un `push` no incluye cambios sin commit. Si aún no quieres hacer commit, Netlif
 
        npx netlify-cli@latest deploy --prod --site ID_DEL_SITIO_DE_PRUEBAS --context production
 
-   `--prod` publica en la URL principal del proyecto indicado por `--site`, que debe ser `*.netlify.app`, nunca `macasmoon.com`. La migración debería aplicarse durante el deploy. Verifica en **Data & Storage → Database → Database branches → View/edit** que existen `reservations` y `reservation_nights`; si faltan, revisa los logs y no crees reservas.
+   `--prod` publica en la URL principal del proyecto indicado por `--site`, que debe ser `*.netlify.app`, nunca `macasmoon.com`. Las migraciones deberían aplicarse durante el deploy. Verifica que existen `reservations`, `reservation_nights`, `admin_sessions` y `admin_login_limits`; si faltan, revisa los logs y no crees reservas.
 
 ## 4. Prueba web antes de conectar los anuncios
 
@@ -71,14 +78,14 @@ El iCal de salida no lleva token ni datos personales; quien conozca su URL puede
 1. En los anuncios del **domo amplio** de Airbnb y Expedia/Partner Central, importa **el mismo enlace de salida**: `https://SITIO.netlify.app/api/calendar/domo-amplio/calendar.ics`. La web mantiene como entrada los dos enlaces privados que esos anuncios exportan.
 2. Verifica que ambas plataformas aceptan el enlace público HTTPS. Si habías importado una antigua URL de salida con token, sustitúyela: la ruta antigua responde 404.
 3. Crea una reserva de prueba del amplio en la web. Aparecerá inmediatamente en el `.ics`; observa cuándo Airbnb y Expedia vuelven a consultarlo y bloquean las noches. Anota las horas.
-4. Cancela desde la página de estado y espera la siguiente importación en cada plataforma antes de concluir que se liberaron las noches.
+4. Cancela desde la página de estado y espera la siguiente importación. **Limitación observada:** Expedia ha conservado cierres incluso después de cancelar en la web o desbloquear en Airbnb. Si ocurre, verifica que no exista otra reserva válida y reabre manualmente solo esas noches del amplio en Expedia. Luego actualiza su calendario importado en Airbnb y comprueba la web. No desconectes/reconectes enlaces para forzar una actualización.
 5. Prueba el sentido inverso con un bloqueo propio y reversible en un anuncio **del amplio** y comprueba que aparece en la web.
 
 iCal funciona mediante consultas periódicas. **No garantiza actualización instantánea ni elimina por completo el riesgo de reservas dobles entre plataformas.** Esta prueba sirve para medir los retrasos reales. Si el riesgo no es aceptable, no actives el cobro automático con iCal.
 
 ## Escaneo de secretos durante el deploy
 
-El proyecto mantiene activo el escaneo de secretos de Netlify. En `netlify.toml`, dentro de `[build.environment]`, `SECRETS_SCAN_OMIT_KEYS` excluye únicamente configuraciones públicas: `BOOKING_ACTIVE_DOMES`, `BOOKING_CURRENCY`, `BOOKING_ENABLED`, `NEXT_PUBLIC_BOOKING_TEST_MODE`, `TILOPAY_CHECKOUT_ENABLED`, `BOOKING_RECONCILE_ENABLED`, `PRICE_DOMO_AMPLIO_CENTS` y `PRICE_DOMO_ROMANTICO_CENTS`. Sus valores pueden aparecer legítimamente en el código, la documentación o la web; no son credenciales.
+El proyecto mantiene activo el escaneo de secretos de Netlify. En `netlify.toml`, dentro de `[build.environment]`, `SECRETS_SCAN_OMIT_KEYS` excluye únicamente configuraciones públicas: `BOOKING_ACTIVE_DOMES`, `BOOKING_CURRENCY`, `BOOKING_ENABLED`, `NEXT_PUBLIC_BOOKING_TEST_MODE`, `TILOPAY_CHECKOUT_ENABLED`, `TILOPAY_EXPECTED_ENVIRONMENT`, `NEXT_PUBLIC_TURNSTILE_SITE_KEY`, `BOOKING_RECONCILE_ENABLED`, `PRICE_DOMO_AMPLIO_CENTS` y `PRICE_DOMO_ROMANTICO_CENTS`. Sus valores pueden aparecer legítimamente en el código, la documentación o la web; no son credenciales privadas. La clave secreta de Turnstile nunca se excluye.
 
 Las claves privadas de prueba, los enlaces iCal de entrada y las credenciales de pagos, correo y base de datos no están excluidos. Mantén esos valores en las variables de entorno de Netlify; los archivos `.env` locales ya están ignorados por Git. No añadas secretos a `NEXT_PUBLIC_*`, a esta lista de exclusiones ni a archivos versionados.
 
