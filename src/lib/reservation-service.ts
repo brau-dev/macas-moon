@@ -61,14 +61,14 @@ export async function startReservation(raw: unknown, testSecret: string | null, 
   if (process.env.BOOKING_ENABLED !== "true") throw new BookingError("Reservas en línea aún no habilitadas.", 503);
   if (test) {
     if (!testSecretAuthorized(requestOrigin, testSecret)) {
-      throw new BookingError("Modo de prueba no autorizado.", 403);
+      throw new BookingError("Acceso no autorizado para reservas sin cobro.", 403);
     }
   } else if (process.env.TILOPAY_CHECKOUT_ENABLED !== "true") {
     throw new BookingError("Pagos en línea aún no habilitados.", 503);
   }
   if (!test) requireCheckoutConfig();
   const input = validate(raw);
-  if (!isDomeActive(input.dome)) throw new BookingError("Este domo no admite reservas en esta prueba.", 503);
+  if (!isDomeActive(input.dome)) throw new BookingError("Este domo no admite reservas en línea actualmente.", 503);
   if (!test) await checkoutStep("security", () => verifyBookingChallenge((raw as Record<string, unknown>).turnstileToken));
   const availability = await checkoutStep("availability", () => getCombinedAvailability(input.dome, true));
   if (availability.status !== "ready") throw new BookingError("No se pudo verificar toda la disponibilidad. Intenta más tarde.", 503);
@@ -102,7 +102,7 @@ export async function startReservation(raw: unknown, testSecret: string | null, 
   }
   if (test) {
     const confirmed = await confirmBooking(id);
-    if (!confirmed) throw new BookingError("No se pudo confirmar la prueba.", 500);
+    if (!confirmed) throw new BookingError("No se pudo confirmar la reserva sin cobro.", 500);
     try { await sendConfirmation(confirmed); } catch (error) { logServerError("Confirmation email failed", error); }
     return { id, status: "confirmed" as const, amountCents: 0, currency };
   }

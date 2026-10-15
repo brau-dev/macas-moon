@@ -19,6 +19,7 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
     return NextResponse.json({ id, status: current.status, dome: current.dome,
       checkIn: current.check_in, checkOut: current.check_out, amountCents: current.amount_cents,
       currency: current.currency, testMode: current.payment_provider === "test",
+      simulatedPayment: current.payment_provider === "test" || process.env.TILOPAY_EXPECTED_ENVIRONMENT === "Test",
       emailSent: Boolean(current.confirmation_email_sent_at) },
     { headers: { "Cache-Control": "no-store" } });
   } catch (error) {

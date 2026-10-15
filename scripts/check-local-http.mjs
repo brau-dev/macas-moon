@@ -31,7 +31,7 @@ const pricing = await request("/api/pricing", 200);
 assert.match(pricing.headers.get("cache-control") ?? "", /no-store/);
 const values = await pricing.json();
 assert.equal(values.currency, "USD");
-assert(Object.values(values.perNight).every((value) => value === 1), "Esta comprobación es para las tarifas de prueba de un centavo.");
+assert(Object.values(values.perNight).length > 0 && Object.values(values.perNight).every((value) => Number.isSafeInteger(value) && value > 0), "Las tarifas deben ser enteros positivos en centavos.");
 for (const [origin, body, status] of [["https://attacker.invalid", "{}", 403], [base.origin, "[]", 400], [base.origin, " ".repeat(10_001), 413]]) {
   await request("/api/reservations", status, { method: "POST", headers: { origin, "Content-Type": "application/json" }, body });
 }

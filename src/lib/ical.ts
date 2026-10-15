@@ -4,14 +4,14 @@ import type { AvailabilityResponse, OccupiedRange } from "@/lib/availability-typ
 
 const CACHE_MS = 5 * 60 * 1000;
 const MAX_BYTES = 2_000_000;
-const URLS: Record<string, Array<string | undefined>> = {
+const calendarUrls = (): Record<string, Array<string | undefined>> => ({
   "domo-romantico": [process.env.ICAL_DOMO_ROMANTICO_AIRBNB_URL, process.env.ICAL_DOMO_ROMANTICO_EXPEDIA_URL],
   "domo-amplio": [process.env.ICAL_DOMO_AMPLIO_AIRBNB_URL, process.env.ICAL_DOMO_AMPLIO_EXPEDIA_URL],
-};
+});
 
 export type CalendarSource = { name: "Airbnb" | "Expedia"; status: "ready" | "error" | "unconfigured";
   blocked: OccupiedRange[]; checkedAt: string | null };
-const cache = new Map<string, { expires: number; result: AvailabilityResponse; sources: CalendarSource[] }>();
+const cache = new Map<string, { expires: number; fingerprint: string; result: AvailabilityResponse; sources: CalendarSource[] }>();
 
 function isoDate(raw: string) {
   if (!/^\d{8}$/.test(raw)) throw new Error("Invalid iCal date");
@@ -103,13 +103,15 @@ async function readCalendar(rawUrl: string) {
 }
 
 async function loadCalendars(dome: string, forceRefresh: boolean) {
-  const urls = URLS[dome];
+  const urlsByDome = calendarUrls();
+  const urls = urlsByDome[dome];
   if (!urls) throw new Error("Unknown dome");
   const configured = urls.map((url) => url?.trim()).filter((url): url is string => Boolean(url));
   const existing = cache.get(dome);
-  if (!forceRefresh && existing && existing.expires > Date.now()) return existing;
+  const fingerprint = JSON.stringify(urlsByDome);
+  if (!forceRefresh && existing && existing.expires > Date.now() && existing.fingerprint === fingerprint) return existing;
 
-  const allConfigured = Object.values(URLS).flat().map((url) => url?.trim()).filter(Boolean);
+  const allConfigured = Object.values(urlsByDome).flat().map((url) => url?.trim()).filter(Boolean);
   const duplicate = configured.some((url) => allConfigured.filter((value) => value === url).length > 1);
   const sources: CalendarSource[] = await Promise.all(urls.map(async (url, index) => {
     const name = index === 0 ? "Airbnb" as const : "Expedia" as const;
@@ -129,7 +131,7 @@ async function loadCalendars(dome: string, forceRefresh: boolean) {
     blocked: mergeRanges(successful.flatMap((feed) => feed.blocked)),
     checkedAt: new Date().toISOString(),
   };
-  const entry = { expires: Date.now() + CACHE_MS, result, sources };
+  const entry = { expires: Date.now() + CACHE_MS, fingerprint, result, sources };
   cache.set(dome, entry);
   return entry;
 }

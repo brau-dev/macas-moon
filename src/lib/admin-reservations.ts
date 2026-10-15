@@ -14,14 +14,16 @@ export function validateAdminDome(dome: string) {
 }
 
 export async function adminCalendar(dome: string, start: string, end: string, refresh: boolean) {
-  validateAdminDome(dome);
+  // An administrator can inspect either property even before online sales are enabled.
+  // Mutations still require an active dome and fully verified calendars.
+  if (!getDome(dome)) throw new BookingError("Domo desconocido.", 400);
   await transaction(releaseExpiredNights);
   const [imported, reservations, issues] = await Promise.all([
     getCalendarSources(dome, refresh),
     getPool().query<Booking>(`SELECT ${bookingColumns} FROM reservations
       WHERE dome = $1 AND check_in < $3::date AND check_out > $2::date ORDER BY check_in, created_at`, [dome, start, end]),
     getPool().query<Booking>(`SELECT ${bookingColumns} FROM reservations
-      WHERE payment_issue IS NOT NULL ORDER BY created_at DESC LIMIT 50`),
+      WHERE dome = $1 AND payment_issue IS NOT NULL ORDER BY created_at DESC LIMIT 50`, [dome]),
   ]);
   const expose = (row: Booking) => ({ id: row.id, dome: row.dome, checkIn: row.check_in, checkOut: row.check_out,
     kind: row.kind, status: row.status, name: row.guest_name, email: row.guest_email, phone: row.guest_phone,
@@ -29,7 +31,7 @@ export async function adminCalendar(dome: string, start: string, end: string, re
     provider: row.payment_provider, note: row.admin_note, expiresAt: row.expires_at?.toISOString() ?? null,
     emailSent: Boolean(row.confirmation_email_sent_at), ownerEmailRequired: row.owner_notification_required,
     ownerEmailSent: Boolean(row.owner_notification_sent_at), paymentIssue: row.payment_issue });
-  return { reservations: reservations.rows.map(expose), issues: issues.rows.map(expose),
+  return { dome, bookingEnabled: isDomeActive(dome), reservations: reservations.rows.map(expose), issues: issues.rows.map(expose),
     imported: imported.map((source) => ({ ...source,
       blocked: source.blocked.filter((range) => range.start < end && range.end > start) })),
     checkedAt: new Date().toISOString() };

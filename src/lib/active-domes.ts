@@ -15,3 +15,7 @@ export function getActiveDomeSlugs(): string[] {
 export function isDomeActive(slug: string): boolean {
   return getActiveDomeSlugs().includes(slug);
 }
+
+export function getAdminDomeOptions() {
+  return domes.map(({ slug, name }) => ({ slug, name, enabled: isDomeActive(slug) }));
+}

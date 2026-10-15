@@ -19,7 +19,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     if (!validReservationId(id)) throw new BookingError("Reserva inválida.", 400);
     const { action } = await readAdminJson(request);
     if (action === "cancel-test") {
-      if (!await cancelTestBooking(id)) throw new BookingError("No se encontró una reserva de prueba confirmada.", 409);
+      if (!await cancelTestBooking(id)) throw new BookingError("No se encontró una reserva sin cobro confirmada.", 409);
     } else if (action === "reconcile") {
       await reconcilePayment(id);
     } else if (action === "retry-email") {

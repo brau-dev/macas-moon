@@ -18,6 +18,6 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     return NextResponse.json({ cancelled }, { status: cancelled ? 200 : 409 });
   } catch (error) {
     logServerError("Test booking cancellation failed", error);
-    return NextResponse.json({ error: "No se pudo cancelar la prueba" }, { status: 503 });
+    return NextResponse.json({ error: "No se pudo cancelar la reserva sin cobro" }, { status: 503 });
   }
 }

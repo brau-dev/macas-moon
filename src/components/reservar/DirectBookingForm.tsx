@@ -12,6 +12,7 @@ import { addDays, todayInCostaRica } from "@/lib/date-range";
 import { useLanguage } from "@/i18n/LanguageProvider";
 import { residenceCountries } from "@/lib/countries";
 import { trustedTilopayPaymentUrl } from "@/lib/tilopay-payment-url";
+import { resolveBookingDome } from "@/lib/booking-selection";
 
 type Pricing = { currency: string; perNight: Record<string, number> };
 
@@ -36,15 +37,14 @@ export function DirectBookingForm({ initialDome }: { initialDome?: string }) {
   const [error, setError] = useState("");
   const [testSecret, setTestSecret] = useState("");
   const [refreshVersion, setRefreshVersion] = useState(0);
+  const [guests, setGuests] = useState(2);
 
   useEffect(() => {
     fetch("/api/pricing", { cache: "no-store" }).then((response) => response.ok ? response.json() : null)
       .then((value) => setPricing(value)).catch(() => setPricing(null));
   }, []);
 
-  const activeDome = (pricing?.perNight[dome] ?? 0) > 0
-    ? dome
-    : (domes.find((item) => (pricing?.perNight[item.slug] ?? 0) > 0)?.slug ?? "");
+  const activeDome = resolveBookingDome(dome, pricing?.perNight);
 
   useEffect(() => {
     if (!activeDome) return;
@@ -69,7 +69,6 @@ export function DirectBookingForm({ initialDome }: { initialDome?: string }) {
   }, [activeDome, refreshVersion]);
 
   const selected = domes.find((item) => item.slug === activeDome);
-  const bookableDomes = domes.filter((item) => (pricing?.perNight[item.slug] ?? 0) > 0);
   const amountCents = checkIn && checkOut && pricing && activeDome
     ? Math.max(0, nights(checkIn, checkOut)) * (pricing.perNight[activeDome] ?? 0) : 0;
   const amount = pricing && amountCents > 0
@@ -88,7 +87,7 @@ export function DirectBookingForm({ initialDome }: { initialDome?: string }) {
       return;
     }
     if (!pricing || !amountCents) { setError("No se pudo calcular el precio."); return; }
-    if (testMode && !testSecret) { setError("Introduce la clave de prueba."); return; }
+    if (testMode && !testSecret) { setError("Introduce la clave de acceso para reservas sin cobro."); return; }
     const form = new FormData(event.currentTarget);
     const payload = {
       dome: activeDome, checkIn, checkOut, expectedAmountCents: amountCents,
@@ -132,13 +131,16 @@ export function DirectBookingForm({ initialDome }: { initialDome?: string }) {
 
   return <form onSubmit={submit} className="space-y-6">
     <label className="block text-sm font-medium text-ink">{t("Domo seleccionado")}
-      <select required value={activeDome} onChange={(event) => {
-        setDome(event.target.value); setCheckIn(""); setCheckOut(""); setAvailability(null);
+      <select required value={dome || activeDome} disabled={busy} onChange={(event) => {
+        setDome(event.target.value); setCheckIn(""); setCheckOut(""); setAvailability(null); setError("");
+        const capacity = domes.find((item) => item.slug === event.target.value)?.capacity ?? 1;
+        setGuests((count) => Math.min(Math.max(count, 1), capacity));
       }} className={field}>
         <option value="">{t("Elige un domo")}</option>
-        {bookableDomes.map((item) => <option key={item.slug} value={item.slug}>{t(item.name)}</option>)}
+        {domes.map((item) => <option key={item.slug} value={item.slug} disabled={!((pricing?.perNight[item.slug] ?? 0) > 0)}>{t(item.name)}</option>)}
       </select>
     </label>
+    {dome && pricing && !activeDome ? <p role="status" className="text-sm text-muted">Las reservas en línea del domo seleccionado no están disponibles actualmente. Puedes elegir otro alojamiento en el selector.</p> : null}
     {activeDome ? <AvailabilityCalendar availability={availability} checkIn={checkIn} checkOut={checkOut}
       onSelect={(arrival, departure) => { setCheckIn(arrival); setCheckOut(departure); setError(""); }} /> : null}
     {activeDome ? <button type="button" disabled={busy} onClick={() => setRefreshVersion((value) => value + 1)}
@@ -153,7 +155,8 @@ export function DirectBookingForm({ initialDome }: { initialDome?: string }) {
           onChange={(event) => setCheckOut(event.target.value)} className={field} /></label>
     </div>
     <label className="block text-sm font-medium text-ink">{t("Huéspedes")}
-      <input required type="number" name="guests" min="1" max={selected?.capacity ?? 1} defaultValue="2" className={field} /></label>
+      <input required type="number" name="guests" min="1" max={selected?.capacity ?? 1}
+        value={guests || ""} onChange={(event) => setGuests(Number(event.target.value))} className={field} /></label>
     <label className="block text-sm font-medium text-ink">{t("Nombre completo")}
       <input required name="name" autoComplete="name" maxLength={100} className={field} /></label>
     <div className="grid gap-4 sm:grid-cols-2">
@@ -169,13 +172,13 @@ export function DirectBookingForm({ initialDome }: { initialDome?: string }) {
       </select>
     </label>
     {amount ? <p className="rounded-2xl bg-sand-50 p-4 text-sm text-ink">
-      {nights(checkIn, checkOut)} noches · {testMode ? "Tarifa de referencia (no se cobra):" : "Total a pagar:"} <strong>{amount}</strong>
+      {nights(checkIn, checkOut)} noches · {testMode ? "Importe de referencia, sin cobro:" : "Total de la estadía:"} <strong>{amount}</strong>
     </p> : <p className="text-sm text-muted">Selecciona las fechas para ver el precio final.</p>}
     <p className="text-xs leading-relaxed text-muted">{testMode
-      ? "La reserva de prueba se confirma sin pago y aparece en el iCal de salida. Airbnb y Expedia consultan ese calendario periódicamente, por lo que persiste un riesgo de cruce de reservas."
+      ? "Esta modalidad permite confirmar una reserva sin cobro con una clave de acceso. Las noches confirmadas se publican en el calendario de disponibilidad."
       : "La reserva se confirma únicamente tras verificar el pago. Las plataformas externas actualizan sus calendarios iCal periódicamente, por lo que existe un riesgo residual de cruce de reservas."}</p>
     {testMode ? <label className="block text-sm font-medium text-ink">
-      Clave de prueba (sin cobro)
+      Clave de acceso para reservas sin cobro
       <input type="password" autoComplete="off" value={testSecret} onChange={(event) => setTestSecret(event.target.value)} className={field} />
     </label> : null}
     {!testMode && process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ? <>
@@ -186,7 +189,7 @@ export function DirectBookingForm({ initialDome }: { initialDome?: string }) {
     {!testMode ? <p className="text-xs text-muted">Al continuar se abrirá la página segura de Tilopay en esta misma pestaña. No introduzcas los datos de tu tarjeta en este formulario.</p> : null}
     {error ? <p role="alert" className="text-sm text-red-700">{error}</p> : null}
     <Button type="submit" size="lg" className="w-full" disabled={busy || !amount || availability?.status !== "ready" || (testMode && !testSecret)}>
-      {busy ? "Procesando…" : testMode ? "Confirmar reserva de prueba (sin cobro)" : "Continuar al pago seguro"}
+      {busy ? "Procesando…" : testMode ? "Confirmar reserva sin cobro" : "Continuar al pago seguro"}
     </Button>
   </form>;
 }

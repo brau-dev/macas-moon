@@ -1,5 +1,10 @@
 # Primer deploy de pruebas: Gmail + Tilopay
 
+> **Configuración actual:** ambos domos a US$170 por noche y Tilopay aún en Test.
+> Sigue [Reservas de ambos domos](configuracion-dos-domos.md) para el próximo deploy,
+> los enlaces del romántico y el selector del administrador. Las referencias a
+> US$0,01 y a un solo domo en esta guía corresponden a la configuración anterior.
+
 Usa solo el proyecto **macasmoon-reservas-testing**, nunca el sitio de macasmoon.com.
 Se mantienen **US$0,01 por noche**, pago obligatorio y Tilopay **Test**.
 No se han hecho commits, pushes, deploys ni cobros por ti.

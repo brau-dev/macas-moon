@@ -90,6 +90,7 @@ test("reservations, payments, iCal and private administration", async (t) => {
   const emptyIcs = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nEND:VCALENDAR\r\n";
   let feedFailure = false;
   let feedEvent = "";
+  const domeFeedEvents = new Map<string, string>();
   let nextLinkId = 10;
   type Link = { reference: string; amount: string; currency: string; order: string; approved: boolean };
   const links = new Map<string, Link>();
@@ -129,7 +130,8 @@ test("reservations, payments, iCal and private administration", async (t) => {
     const url = String(input);
     if (url.startsWith("https://airbnb.example") || url.startsWith("https://expedia.example")) {
       if (feedFailure && url.startsWith("https://expedia")) return new Response(null, { status: 503 });
-      return new Response(feedEvent ? `BEGIN:VCALENDAR\r\n${feedEvent}\r\nEND:VCALENDAR\r\n` : emptyIcs);
+      const event = domeFeedEvents.get(url.includes("romantico") ? "domo-romantico" : "domo-amplio") ?? feedEvent;
+      return new Response(event ? `BEGIN:VCALENDAR\r\n${event}\r\nEND:VCALENDAR\r\n` : emptyIcs);
     }
     if (url.includes("challenges.cloudflare.com")) return Response.json({ success: true, hostname: "fixture.netlify.app", action: "booking" });
     if (url.endsWith("/login")) {
@@ -629,7 +631,8 @@ test("reservations, payments, iCal and private administration", async (t) => {
       assert.equal(smtpOptions!.host, "smtp.gmail.com"); assert.equal(smtpOptions!.port, 465);
       assert.equal(smtpOptions!.secure, true); assert.equal(smtpOptions!.debug, false);
       assert.deepEqual(lastEmail!.from, { name: "Macas Moon Glampings", address: "fixture@gmail.com" });
-      assert(String(lastEmail!.text).includes("PRUEBA"));
+      assert(String(lastEmail!.text).includes("sin cargo real"));
+      assert(!String(lastEmail!.text).includes("PRUEBA"));
     });
     await t.test("professional guest and owner messages are separate, complete and escaped", async () => {
       const { bookingEmails } = await import("../src/lib/booking-email-content");
@@ -767,6 +770,113 @@ test("reservations, payments, iCal and private administration", async (t) => {
           if (value === undefined) delete process.env[key!];
           else process.env[key!] = value;
         }
+      }
+    });
+    await t.test("both domes reserve independently at USD 170 and admin calendars/issues stay isolated", async () => {
+      const keys = ["BOOKING_ACTIVE_DOMES", "PRICE_DOMO_ROMANTICO_CENTS", "PRICE_DOMO_AMPLIO_CENTS"];
+      const saved = keys.map((key) => process.env[key]);
+      try {
+        process.env.BOOKING_ACTIVE_DOMES = "domo-romantico,domo-amplio";
+        process.env.PRICE_DOMO_ROMANTICO_CENTS = "17000";
+        process.env.PRICE_DOMO_AMPLIO_CENTS = "17000";
+        const pricing = await import("../src/app/api/pricing/route");
+        assert.deepEqual(await (await pricing.GET()).json(), { currency: "USD", perNight: { "domo-romantico": 17000, "domo-amplio": 17000 } });
+        const ids = new Map<string, string>();
+        for (const dome of ["domo-romantico", "domo-amplio"]) {
+          const result = await service.startReservation({ ...payload("2029-07-01", "2029-07-03"), dome,
+            guests: dome === "domo-romantico" ? 2 : 4, expectedAmountCents: 34000 }, null, "https://fixture.netlify.app");
+          assert.equal(result.amountCents, 34000); assert.equal(paymentBody!.amount, "340.00");
+          const booking = (await db.getBooking(result.id))!;
+          links.get(booking.payment_link_id!)!.approved = true;
+          assert.equal((await service.reconcilePayment(result.id)).status, "confirmed");
+          await sql.query("UPDATE reservations SET payment_issue = 'Revisar registro' WHERE id = $1", [result.id]);
+          ids.set(dome, result.id);
+        }
+        for (const dome of ["domo-romantico", "domo-amplio"]) {
+          const calendar = await manual.adminCalendar(dome, "2029-07-01", "2029-08-01", true);
+          assert.equal(calendar.dome, dome); assert.equal(calendar.bookingEnabled, true);
+          assert(calendar.reservations.some((row) => row.id === ids.get(dome)));
+          assert(calendar.reservations.every((row) => row.dome === dome));
+          assert(calendar.issues.length > 0); assert(calendar.issues.every((row) => row.dome === dome));
+          const response = await exportRoute.GET(new Request("http://localhost/calendar"), { params: Promise.resolve({ dome }) });
+          const ics = await response.text();
+          assert(ics.includes(createHash("sha256").update(ids.get(dome)!).digest("hex")));
+          const other = dome === "domo-amplio" ? "domo-romantico" : "domo-amplio";
+          assert(!ics.includes(createHash("sha256").update(ids.get(other)!).digest("hex")));
+        }
+        await assert.rejects(service.startReservation({ ...payload("2029-07-05", "2029-07-06"), dome: "domo-romantico", guests: 3, expectedAmountCents: 17000 }, null, "https://fixture.netlify.app"), { status: 400 });
+        const blocks = await Promise.all(["domo-romantico", "domo-amplio"].map((dome) => manual.createManualBlock({ dome, checkIn: "2029-07-10", checkOut: "2029-07-11", note: "Mantenimiento" })));
+        assert.equal(blocks.length, 2);
+        for (const id of blocks) await manual.removeManualBlock(id);
+      } finally { keys.forEach((key, index) => { if (saved[index] === undefined) delete process.env[key]; else process.env[key] = saved[index]; }); }
+    });
+    await t.test("romantic import calendars never block the wide dome, and missing links fail closed", async () => {
+      const savedActive = process.env.BOOKING_ACTIVE_DOMES;
+      const savedFeed = process.env.ICAL_DOMO_ROMANTICO_EXPEDIA_URL;
+      try {
+        process.env.BOOKING_ACTIVE_DOMES = "domo-romantico,domo-amplio";
+        domeFeedEvents.set("domo-romantico", "BEGIN:VEVENT\r\nDTSTART;VALUE=DATE:20290801\r\nDTEND;VALUE=DATE:20290802\r\nEND:VEVENT");
+        assert((await ical.getAvailability("domo-romantico", true)).blocked.some((range) => range.start === "2029-08-01"));
+        assert(!(await ical.getAvailability("domo-amplio", true)).blocked.some((range) => range.start === "2029-08-01"));
+        const before = createdPayments;
+        delete process.env.ICAL_DOMO_ROMANTICO_EXPEDIA_URL;
+        const availability = await ical.getAvailability("domo-romantico");
+        assert.notEqual(availability.status, "ready");
+        await assert.rejects(service.startReservation({ ...payload("2029-08-03", "2029-08-04"), dome: "domo-romantico" }, testKey, "http://localhost"), { status: 503 });
+        assert.equal(createdPayments, before);
+        assert.equal((await sql.query("SELECT id FROM reservations WHERE dome='domo-romantico' AND check_in='2029-08-03'")).rows.length, 0);
+      } finally {
+        process.env.BOOKING_ACTIVE_DOMES = savedActive;
+        process.env.ICAL_DOMO_ROMANTICO_EXPEDIA_URL = savedFeed;
+        domeFeedEvents.clear();
+      }
+    });
+    await t.test("explicit romantic selection never silently switches to the wide dome", async () => {
+      const { resolveBookingDome } = await import("../src/lib/booking-selection");
+      const both = { "domo-romantico": 17000, "domo-amplio": 17000 };
+      assert.equal(resolveBookingDome("domo-romantico", both), "domo-romantico");
+      assert.equal(resolveBookingDome("domo-amplio", both), "domo-amplio");
+      assert.equal(resolveBookingDome("domo-romantico", { "domo-amplio": 17000 }), "");
+      assert.equal(resolveBookingDome("domo-romantico", undefined), "");
+      assert.equal(resolveBookingDome("", { "domo-amplio": 17000 }), "domo-amplio");
+    });
+    await t.test("admin always lists both domes and can inspect an inactive romantic calendar", async () => {
+      const { getAdminDomeOptions } = await import("../src/lib/active-domes");
+      assert.deepEqual(getAdminDomeOptions().map(({ slug, enabled }) => ({ slug, enabled })), [
+        { slug: "domo-amplio", enabled: true }, { slug: "domo-romantico", enabled: false },
+      ]);
+      const calendar = await manual.adminCalendar("domo-romantico", "2029-07-01", "2029-08-01", false);
+      assert.equal(calendar.dome, "domo-romantico"); assert.equal(calendar.bookingEnabled, false);
+      await assert.rejects(manual.adminCalendar("unknown", "2029-07-01", "2029-08-01", false), { status: 400 });
+    });
+    await t.test("admin interface renders both calendar options with commercial wording", async () => {
+      const { createElement } = await import("react");
+      const { renderToStaticMarkup } = await import("react-dom/server");
+      const { AppRouterContext } = await import("next/dist/shared/lib/app-router-context.shared-runtime");
+      const { AdminDashboard } = await import("../src/components/admin/AdminDashboard");
+      const { getAdminDomeOptions } = await import("../src/lib/active-domes");
+      const router = { bfcacheId: "fixture", back() {}, forward() {}, refresh() {}, hmrRefresh() {}, push() {}, replace() {}, prefetch() {} };
+      const render = (environment: string) => renderToStaticMarkup(createElement(AppRouterContext.Provider,
+        { value: router }, createElement(AdminDashboard, { domes: getAdminDomeOptions(),
+          checkout: { enabled: true, freeTest: false, environment, missing: [], emailMissing: [] }, siteOrigin: "https://fixture.netlify.app" })));
+      const html = render("Production");
+      assert(html.includes('value="domo-romantico"')); assert(html.includes('value="domo-amplio"'));
+      assert(html.includes("Ver calendario de")); assert(html.includes("Romántico")); assert(html.includes("Amplio"));
+      assert(!/\b(?:pruebas?|simulad[oa]s?|test)\b/i.test(html));
+      assert(html.includes("https://fixture.netlify.app/api/calendar/domo-amplio/calendar.ics"));
+      assert(render("Test").includes("Operaciones sin cargos reales"));
+    });
+    await t.test("commercial emails have no trial labels; simulated payments are never described as money charged", async () => {
+      const { bookingEmails } = await import("../src/lib/booking-email-content");
+      const booking = { ...(await db.getBooking(paidBookingId))!, guest_name: "María Castro" };
+      const production = bookingEmails(booking, "Production", "https://fixture.netlify.app");
+      const simulated = bookingEmails(booking, "Test", "https://fixture.netlify.app");
+      for (const audience of ["guest", "owner"] as const) {
+        const real = production[audience]; const demo = simulated[audience];
+        assert(!/prueba|simulad|\btest\b/i.test(real.subject + real.text + real.html));
+        assert(real.text.includes("Total pagado")); assert(real.text.includes("pago confirmado"));
+        assert(!/prueba|\btest\b/i.test(demo.subject + demo.text + demo.html));
+        assert(demo.text.includes("sin cargo real")); assert(!demo.text.includes("Total pagado"));
       }
     });
     await t.test("deploy checks distinguish free, paid and production configuration without reading real env", async () => {
