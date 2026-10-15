@@ -17,6 +17,7 @@ import { cleanField as clean, validateStay } from "@/lib/booking-validation";
 import { isResidenceCountry } from "@/lib/countries";
 import { requireCheckoutConfig } from "@/lib/checkout-config";
 import { logServerError } from "@/lib/safe-log";
+import { CheckoutError, checkoutStep } from "@/lib/checkout-error";
 
 type BookingInput = {
   dome: string; checkIn: string; checkOut: string; guests: number;
@@ -68,8 +69,8 @@ export async function startReservation(raw: unknown, testSecret: string | null, 
   if (!test) requireCheckoutConfig();
   const input = validate(raw);
   if (!isDomeActive(input.dome)) throw new BookingError("Este domo no admite reservas en esta prueba.", 503);
-  if (!test) await verifyBookingChallenge((raw as Record<string, unknown>).turnstileToken);
-  const availability = await getCombinedAvailability(input.dome, true);
+  if (!test) await checkoutStep("security", () => verifyBookingChallenge((raw as Record<string, unknown>).turnstileToken));
+  const availability = await checkoutStep("availability", () => getCombinedAvailability(input.dome, true));
   if (availability.status !== "ready") throw new BookingError("No se pudo verificar toda la disponibilidad. Intenta más tarde.", 503);
   if (overlapsBlocked(input.checkIn, input.checkOut, availability.blocked)) {
     throw new BookingError("Estas fechas ya están ocupadas.", 409);
@@ -97,7 +98,7 @@ export async function startReservation(raw: unknown, testSecret: string | null, 
     if (error && typeof error === "object" && "code" in error && error.code === "23505") {
       throw new BookingError("Estas fechas acaban de reservarse. Elige otras.", 409);
     }
-    throw error;
+    throw new CheckoutError("reservation_create", "unexpected", { cause: error });
   }
   if (test) {
     const confirmed = await confirmBooking(id);
@@ -105,13 +106,16 @@ export async function startReservation(raw: unknown, testSecret: string | null, 
     try { await sendConfirmation(confirmed); } catch (error) { logServerError("Confirmation email failed", error); }
     return { id, status: "confirmed" as const, amountCents: 0, currency };
   }
-  const saved = await getBooking(id);
-  if (!saved) throw new Error("Booking disappeared after creation");
   try {
+    const saved = await checkoutStep("reservation_read", () => getBooking(id));
+    if (!saved) throw new CheckoutError("reservation_read", "unexpected");
     const paymentUrl = await createPaymentUrl(saved, siteUrl!);
     return { id, status: "pending" as const, paymentUrl, amountCents: amount, currency };
   } catch (error) {
-    await expireBooking(id);
+    // Cleanup must not replace the original payment failure with a second error.
+    // Unreleased holds still expire after 30 minutes; the scheduled job retries cleanup.
+    try { await checkoutStep("reservation_cleanup", () => expireBooking(id)); }
+    catch (cleanupError) { logServerError("Reservation cleanup failed", cleanupError); }
     throw error;
   }
 }

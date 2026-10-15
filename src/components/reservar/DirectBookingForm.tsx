@@ -11,6 +11,7 @@ import { overlapsBlocked } from "@/lib/availability-types";
 import { addDays, todayInCostaRica } from "@/lib/date-range";
 import { useLanguage } from "@/i18n/LanguageProvider";
 import { residenceCountries } from "@/lib/countries";
+import { trustedTilopayPaymentUrl } from "@/lib/tilopay-payment-url";
 
 type Pricing = { currency: string; perNight: Record<string, number> };
 
@@ -96,6 +97,10 @@ export function DirectBookingForm({ initialDome }: { initialDome?: string }) {
       name: form.get("name"), email: form.get("email"), phone: form.get("phone"),
       country: form.get("country"),
     };
+    if (!testMode && (typeof payload.turnstileToken !== "string" || !payload.turnstileToken)) {
+      setError("Espera a que termine la verificación de seguridad antes de continuar.");
+      return;
+    }
     setBusy(true);
     try {
       const response = await fetch("/api/reservations", {
@@ -104,11 +109,20 @@ export function DirectBookingForm({ initialDome }: { initialDome?: string }) {
             ? { "x-booking-test-secret": testSecret } : {}) },
         body: JSON.stringify(payload),
       });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error ?? "No se pudo iniciar la reserva.");
+      let result;
+      try { result = await response.json(); }
+      catch { throw new Error("El servidor no pudo preparar el pago. Intenta de nuevo en unos momentos."); }
+      if (!response.ok) {
+        const reference = typeof result.requestId === "string" && /^[a-f0-9-]{36}$/.test(result.requestId)
+          ? ` Referencia de soporte: ${result.requestId}.` : "";
+        throw new Error((result.error ?? "No se pudo iniciar la reserva.") + reference);
+      }
       if (result.status === "confirmed") router.push(`/reservar/estado?id=${result.id}`);
-      else if (result.paymentUrl) window.location.assign(result.paymentUrl);
-      else throw new Error("Tilopay no devolvió una página de pago.");
+      else {
+        const paymentUrl = trustedTilopayPaymentUrl(result.paymentUrl);
+        if (!paymentUrl) throw new Error("No se recibió una dirección de pago válida de Tilopay.");
+        window.location.assign(paymentUrl);
+      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "No se pudo iniciar la reserva.");
       (window as Window & { turnstile?: { reset: () => void } }).turnstile?.reset();
@@ -169,6 +183,7 @@ export function DirectBookingForm({ initialDome }: { initialDome?: string }) {
       <div className="cf-turnstile" data-sitekey={process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY}
         data-action="booking" />
     </> : null}
+    {!testMode ? <p className="text-xs text-muted">Al continuar se abrirá la página segura de Tilopay en esta misma pestaña. No introduzcas los datos de tu tarjeta en este formulario.</p> : null}
     {error ? <p role="alert" className="text-sm text-red-700">{error}</p> : null}
     <Button type="submit" size="lg" className="w-full" disabled={busy || !amount || availability?.status !== "ready" || (testMode && !testSecret)}>
       {busy ? "Procesando…" : testMode ? "Confirmar reserva de prueba (sin cobro)" : "Continuar al pago seguro"}

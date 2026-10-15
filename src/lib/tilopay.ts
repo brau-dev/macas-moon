@@ -1,20 +1,32 @@
 import "server-only";
 import { createHash } from "node:crypto";
 import { getPool, savePaymentLink, type Booking } from "@/lib/booking-db";
+import { CheckoutError, checkoutStep, type CheckoutStage } from "@/lib/checkout-error";
+import { trustedTilopayPaymentUrl } from "@/lib/tilopay-payment-url";
 
 const API = "https://app.tilopay.com/api/v1";
 
 async function api<T>(path: string, body: object | null, bearer?: string): Promise<T> {
-  const response = await fetch(`${API}/${path}`, {
-    method: body === null ? "GET" : "POST",
-    headers: { "Content-Type": "application/json", ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}) },
-    body: body === null ? undefined : JSON.stringify(body),
-    cache: "no-store",
-    signal: AbortSignal.timeout(12_000),
+  const stage: CheckoutStage = path === "login" ? "tilopay_auth"
+    : path === "createLinkPayment" ? "tilopay_link" : "tilopay_check";
+  return checkoutStep(stage, async () => {
+    const response = await fetch(`${API}/${path}`, {
+      method: body === null ? "GET" : "POST",
+      headers: { "Content-Type": "application/json", ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}) },
+      body: body === null ? undefined : JSON.stringify(body),
+      cache: "no-store",
+      signal: AbortSignal.timeout(12_000),
+    });
+    // GET detail paths contain the merchant key: never put them in logs/errors.
+    if (!response.ok) throw new CheckoutError(stage, "http", { upstreamStatus: response.status });
+    let result: unknown;
+    try { result = await response.json(); }
+    catch { throw new CheckoutError(stage, "invalid_response"); }
+    if (!result || typeof result !== "object" || Array.isArray(result)) {
+      throw new CheckoutError(stage, "invalid_response");
+    }
+    return result as T;
   });
-  // GET detail paths contain the merchant key: never put them in logs/errors.
-  if (!response.ok) throw new Error(`Tilopay ${path.split("/")[0]} HTTP ${response.status}`);
-  return response.json() as Promise<T>;
 }
 
 function credentials() {
@@ -35,7 +47,9 @@ async function token() {
   if (tokenRequest?.fingerprint === fingerprint) return tokenRequest.promise;
   const promise = (async () => {
     const result = await api<{ access_token?: string; expires_in?: number }>("login", { apiuser: user, password });
-    if (!result.access_token) throw new Error("Tilopay did not return a token");
+    if (typeof result.access_token !== "string" || !result.access_token) {
+      throw new CheckoutError("tilopay_auth", "missing_token");
+    }
     // Use the provider's actual lifetime, not an assumed 24-hour expiry. Cache
     // only in server memory; a cold function obtains its own token.
     if (Number.isSafeInteger(result.expires_in) && result.expires_in! > 60) {
@@ -61,15 +75,16 @@ export async function createPaymentUrl(booking: Booking, siteUrl: string) {
     callback_url: `${siteUrl}/api/reservations/return/${booking.id}`,
     webhook_url: `${siteUrl}/api/reservations/webhook`,
   }, await token());
-  if (result.type !== "200" || !result.url || !Number.isSafeInteger(result.id) || result.id! <= 0) {
-    throw new Error("Tilopay did not create a single-use payment link");
+  if (result.type !== "200") {
+    throw new CheckoutError("tilopay_link", "rejected", { providerCode: result.type });
   }
-  const url = new URL(result.url);
-  if (url.protocol !== "https:" || !url.hostname.endsWith(".tilopay.com")) {
-    throw new Error("Tilopay returned an unexpected payment URL");
+  if (!Number.isSafeInteger(result.id) || result.id! <= 0) {
+    throw new CheckoutError("tilopay_link", "invalid_response");
   }
-  await savePaymentLink(booking.id, String(result.id));
-  return url.toString();
+  const url = trustedTilopayPaymentUrl(result.url);
+  if (!url) throw new CheckoutError("tilopay_link", "invalid_payment_url");
+  await checkoutStep("payment_link_save", () => savePaymentLink(booking.id, String(result.id)));
+  return url;
 }
 
 type Payment = { orderNumber?: string; amount?: string; currency?: string; code?: string;

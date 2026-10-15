@@ -34,6 +34,7 @@ test("reservations, payments, iCal and private administration", async (t) => {
   assert.equal((await sql.query<{ owner_notification_required: boolean }>("SELECT owner_notification_required FROM reservations WHERE id = $1", [legacyId])).rows[0].owner_notification_required, false);
 
   let queue = Promise.resolve();
+  let failBookingRead = false;
   async function acquire() {
     const previous = queue;
     let release!: () => void;
@@ -47,6 +48,10 @@ test("reservations, payments, iCal and private administration", async (t) => {
   };
   class TestPool {
     async query(text: string, args?: unknown[]) {
+      if (failBookingRead && text.startsWith("SELECT id, dome, check_in::text")) {
+        failBookingRead = false;
+        throw new Error("Private database failure guest@example.com");
+      }
       const release = await acquire();
       try { return await query(text, args); } finally { release(); }
     }
@@ -91,6 +96,9 @@ test("reservations, payments, iCal and private administration", async (t) => {
   let paymentBody: Record<string, unknown> | null = null;
   let createdPayments = 0;
   let loginCalls = 0;
+  let authFixture: "success" | "http" | "missing_token" = "success";
+  let linkFixture: "success" | "http" | "reject" | "bad_json" | "unsafe_url" |
+    "missing_id" | "timeout" | "connection" = "success";
   let emailCalls = 0;
   let smtpFailure = false;
   let smtpFailedAudience: "guest" | "owner" | null = null;
@@ -119,14 +127,26 @@ test("reservations, payments, iCal and private administration", async (t) => {
       return new Response(feedEvent ? `BEGIN:VCALENDAR\r\n${feedEvent}\r\nEND:VCALENDAR\r\n` : emptyIcs);
     }
     if (url.includes("challenges.cloudflare.com")) return Response.json({ success: true, hostname: "fixture.netlify.app", action: "booking" });
-    if (url.endsWith("/login")) { loginCalls++; return Response.json({ access_token: "fixture-token", expires_in: 3600 }); }
+    if (url.endsWith("/login")) {
+      loginCalls++;
+      if (authFixture === "http") return new Response("Private API password", { status: 401 });
+      if (authFixture === "missing_token") return Response.json({ type: "401", message: "Private API password" });
+      return Response.json({ access_token: "fixture-token", expires_in: 3600 });
+    }
     if (url.endsWith("/createLinkPayment")) {
+      if (linkFixture === "http") return new Response("Private provider body fixture-password", { status: 403 });
+      if (linkFixture === "reject") return Response.json({ type: "422", message: "Private provider body fixture-password" });
+      if (linkFixture === "bad_json") return new Response("Private provider body fixture-password");
+      if (linkFixture === "timeout") throw new DOMException("Private timeout", "TimeoutError");
+      if (linkFixture === "connection") throw new TypeError("fetch failed", { cause: Object.assign(new Error("Private merchant URL"), { code: "ECONNRESET" }) });
       paymentBody = JSON.parse(String(init?.body));
       createdPayments++;
       const id = String(nextLinkId++);
       links.set(id, { reference: String(paymentBody!.reference), amount: String(paymentBody!.amount),
         currency: String(paymentBody!.currency), order: `TPT${id}`, approved: false });
-      return Response.json({ type: "200", url: `https://app.tilopay.com/link/${id}`, id: Number(id) });
+      return Response.json({ type: "200", url: linkFixture === "unsafe_url"
+        ? `https://tilo.co.attacker.example/link/${id}` : `https://tilo.co/link/${id}`,
+        ...(linkFixture === "missing_id" ? {} : { id: Number(id) }) });
     }
     if (url.includes("/getDetailLinkPayment/")) {
       const id = url.split("/").at(-2)!;
@@ -155,6 +175,7 @@ test("reservations, payments, iCal and private administration", async (t) => {
     const testBookings = await import("../src/lib/test-bookings");
     const adminRoute = await import("../src/app/api/admin/blocks/route");
     const testKey = process.env.BOOKING_TEST_SECRET!;
+    let paidBookingId = "";
     const payload = (start: string, end: string) => ({ dome: "domo-amplio", checkIn: start, checkOut: end,
       guests: 2, name: "Test Guest", email: "guest@example.com", phone: "+50688888888", country: "CR",
       expectedAmountCents: Math.round((Date.parse(end) - Date.parse(start)) / 86_400_000) * 12500,
@@ -191,6 +212,19 @@ test("reservations, payments, iCal and private administration", async (t) => {
       assert.equal((await route.POST(request("https://attacker.example", "{}"))).status, 403);
       for (const body of ["null", "[]", "{bad"]) assert.equal((await route.POST(request("http://localhost", body))).status, 400);
       assert.equal((await route.POST(request("http://localhost", " ".repeat(10_001)))).status, 413);
+    });
+    await t.test("payment URL allowlist accepts the real tilo.co domain and rejects spoofed/insecure URLs", async () => {
+      const { trustedTilopayPaymentUrl } = await import("../src/lib/tilopay-payment-url");
+      for (const host of ["tilo.co", "app.tilopay.com", "admin.tilopay.com"]) {
+        const url = `https://${host}/link/fixture==`;
+        assert.equal(trustedTilopayPaymentUrl(url), url);
+      }
+      for (const value of [null, {}, "", "/link/fixture", "javascript:alert(1)",
+        "http://tilo.co/link/fixture", "https://tilo.co.attacker.example/link/fixture",
+        "https://eviltilo.co/link/fixture", "https://tilopay.com.attacker.example/link/fixture",
+        "https://attacker.tilopay.com/link/fixture", "https://tilo.co@attacker.example/link/fixture",
+        "https://attacker.example@tilo.co/link/fixture", "https://user:password@tilo.co/link/fixture",
+        "https://tilo.co:444/link/fixture"]) assert.equal(trustedTilopayPaymentUrl(value), null);
     });
     await t.test("private endpoints reject anonymous users and cross-origin requests", async () => {
       const { readAdminJson } = await import("../src/lib/admin-http");
@@ -309,8 +343,10 @@ test("reservations, payments, iCal and private administration", async (t) => {
     await t.test("real flow stays pending until independently verified; no address sent to createLinkPayment", async () => {
       const beforeTokens = loginCalls;
       const result = await service.startReservation(payload("2028-07-02", "2028-07-03"), null, "https://fixture.netlify.app");
+      paidBookingId = result.id;
       assert.equal(loginCalls, beforeTokens + 1);
       assert.equal(result.status, "pending");
+      assert("paymentUrl" in result && result.paymentUrl.startsWith("https://tilo.co/link/"));
       assert.equal(paymentBody!.type, 1);
       assert(!("billToAddress" in paymentBody!));
       assert(!(await exportIcs()).includes("20280702"));
@@ -326,8 +362,89 @@ test("reservations, payments, iCal and private administration", async (t) => {
       await service.reconcilePayment(result.id);
       assert.equal(emailCalls, beforeEmails);
     });
+    await t.test("reservation API returns a trusted checkout link, never confirms without payment", async () => {
+      const route = await import("../src/app/api/reservations/route");
+      const response = await route.POST(new Request("https://fixture.netlify.app/api/reservations", {
+        method: "POST", headers: { origin: "https://fixture.netlify.app" },
+        body: JSON.stringify(payload("2029-01-01", "2029-01-02")),
+      }));
+      assert.equal(response.status, 200);
+      const body = await response.json();
+      assert.equal(body.status, "pending");
+      assert(body.paymentUrl.startsWith("https://tilo.co/link/"));
+      assert.equal((await db.getBooking(body.id))!.status, "pending");
+      assert(!(await exportIcs()).includes("20290101"));
+    });
+    await t.test("provider failures identify the stage without exposing credentials and release unpaid nights", async () => {
+      const route = await import("../src/app/api/reservations/route");
+      const originalLog = console.error;
+      let logged = "";
+      console.error = (...args) => { logged = JSON.stringify(args); };
+      const beforeEmails = emailCalls;
+      try {
+        const cases = [
+          ["http", "http"], ["reject", "rejected"], ["bad_json", "invalid_response"],
+          ["unsafe_url", "invalid_payment_url"], ["missing_id", "invalid_response"],
+          ["timeout", "timeout"], ["connection", "network"],
+        ] as const;
+        for (const [index, [fixture, reason]] of cases.entries()) {
+          linkFixture = fixture;
+          const start = `2029-01-${String(10 + index).padStart(2, "0")}`;
+          const end = `2029-01-${String(11 + index).padStart(2, "0")}`;
+          const response = await route.POST(new Request("https://fixture.netlify.app/api/reservations", {
+            method: "POST", headers: { origin: "https://fixture.netlify.app" },
+            body: JSON.stringify(payload(start, end)),
+          }));
+          assert.equal(response.status, 502);
+          const body = await response.json();
+          assert.match(body.requestId, /^[a-f0-9-]{36}$/);
+          assert.equal(response.headers.get("X-Request-ID"), body.requestId);
+          assert.equal(response.headers.get("Cache-Control"), "no-store");
+          assert(body.error.includes("Tilopay"));
+          assert.equal(body.paymentUrl, undefined);
+          const details = JSON.parse(logged)[1];
+          assert.equal(details.stage, "tilopay_link");
+          assert.equal(details.reason, reason);
+          assert.equal(details.requestId, body.requestId);
+          if (fixture === "http") assert.equal(details.upstreamStatus, 403);
+          if (fixture === "reject") assert.equal(details.providerCode, "422");
+          if (fixture === "connection") assert.equal(details.code, "ECONNRESET");
+          const output = logged + JSON.stringify(body);
+          for (const secret of ["fixture-password", "Private provider body", "guest@example.com", "merchant URL", "attacker.example"]) assert(!output.includes(secret));
+          const rows = await sql.query<{ status: string }>("SELECT status FROM reservations WHERE check_in = $1", [start]);
+          assert.equal(rows.rows[0].status, "expired");
+          assert.equal((await sql.query("SELECT night FROM reservation_nights WHERE night = $1", [start])).rows.length, 0);
+        }
+        assert.equal(emailCalls, beforeEmails);
+      } finally { linkFixture = "success"; console.error = originalLog; }
+    });
+    await t.test("a failed read after reservation creation also releases the hold", async () => {
+      failBookingRead = true;
+      await assert.rejects(service.startReservation(payload("2029-02-01", "2029-02-02"), null,
+        "https://fixture.netlify.app"), { stage: "reservation_read", reason: "unexpected" });
+      assert.equal((await sql.query<{ status: string }>("SELECT status FROM reservations WHERE check_in = '2029-02-01'")).rows[0].status, "expired");
+      assert.equal((await sql.query("SELECT night FROM reservation_nights WHERE night = '2029-02-01'")).rows.length, 0);
+    });
+    await t.test("API authentication errors retain safe stage/status and release unpaid nights", async () => {
+      const originalPassword = process.env.TILOPAY_API_PASSWORD;
+      const beforePayments = createdPayments;
+      try {
+        for (const [index, fixture] of (["http", "missing_token"] as const).entries()) {
+          process.env.TILOPAY_API_PASSWORD = `invalid-fixture-${index}`;
+          authFixture = fixture;
+          const start = `2029-02-${10 + index}`;
+          const end = `2029-02-${11 + index}`;
+          await assert.rejects(service.startReservation(payload(start, end), null,
+            "https://fixture.netlify.app"), { stage: "tilopay_auth", reason: fixture === "http" ? "http" : "missing_token",
+            ...(fixture === "http" ? { upstreamStatus: 401 } : {}) });
+          assert.equal((await sql.query<{ status: string }>("SELECT status FROM reservations WHERE check_in = $1", [start])).rows[0].status, "expired");
+          assert.equal((await sql.query("SELECT night FROM reservation_nights WHERE night = $1", [start])).rows.length, 0);
+        }
+        assert.equal(createdPayments, beforePayments);
+      } finally { authFixture = "success"; process.env.TILOPAY_API_PASSWORD = originalPassword; }
+    });
     await t.test("wrong amount, currency, environment or capture cannot confirm payment", async () => {
-      const booking = (await db.getBooking((await sql.query<{ id: string }>("SELECT id FROM reservations WHERE payment_provider = 'tilopay' LIMIT 1")).rows[0].id))!;
+      const booking = (await db.getBooking(paidBookingId))!;
       const payment = { orderNumber: "TPT10", amount: "125.00", currency: "USD", code: "1", capture: "Capture", environment: "Test", type: "Payment" };
       assert(payments.matchesApprovedPayment(payment, booking, "TPT10"));
       for (const change of [{ amount: "0.00" }, { amount: "125.001" }, { currency: "CRC" }, { environment: "Production" },
@@ -342,7 +459,7 @@ test("reservations, payments, iCal and private administration", async (t) => {
       } finally { delete process.env.TILOPAY_MERCHANT_ID; }
     });
     await t.test("rotated credentials do not reuse the previous API token", async () => {
-      const booking = (await db.getBooking((await sql.query<{ id: string }>("SELECT id FROM reservations WHERE payment_provider = 'tilopay' LIMIT 1")).rows[0].id))!;
+      const booking = (await db.getBooking(paidBookingId))!;
       const oldPassword = process.env.TILOPAY_API_PASSWORD;
       const before = loginCalls;
       process.env.TILOPAY_API_PASSWORD = "rotated_fixture";
@@ -374,7 +491,7 @@ test("reservations, payments, iCal and private administration", async (t) => {
     });
     await t.test("professional guest and owner messages are separate, complete and escaped", async () => {
       const { bookingEmails } = await import("../src/lib/booking-email-content");
-      const booking = (await db.getBooking((await sql.query<{ id: string }>("SELECT id FROM reservations WHERE payment_provider = 'tilopay' LIMIT 1")).rows[0].id))!;
+      const booking = (await db.getBooking(paidBookingId))!;
       const content = bookingEmails({ ...booking, guest_name: '<script>alert("x")</script> & Guest' }, "Production", "https://fixture.netlify.app");
       assert(content.guest.subject.includes("Macas Moon Glampings"));
       assert(!content.guest.subject.includes("PRUEBA"));

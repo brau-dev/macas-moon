@@ -3,6 +3,8 @@ import { BookingError, startReservation } from "@/lib/reservation-service";
 import { requireSameOrigin } from "@/lib/admin-auth";
 import { readJsonObject } from "@/lib/request-body";
 import { logServerError } from "@/lib/safe-log";
+import { randomUUID } from "node:crypto";
+import { CheckoutError, checkoutPublicMessage } from "@/lib/checkout-error";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,7 +17,11 @@ export async function POST(request: Request) {
     return NextResponse.json(result, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     if (error instanceof BookingError) return NextResponse.json({ error: error.message }, { status: error.status });
-    logServerError("Reservation failed", error);
-    return NextResponse.json({ error: "No se pudo iniciar la reserva. Intenta de nuevo." }, { status: 500 });
+    const requestId = randomUUID();
+    logServerError("Reservation failed", error, requestId);
+    const status = error instanceof CheckoutError &&
+      ["security", "tilopay_auth", "tilopay_link"].includes(error.stage) ? 502 : 500;
+    return NextResponse.json({ error: checkoutPublicMessage(error), requestId },
+      { status, headers: { "Cache-Control": "no-store", "X-Request-ID": requestId } });
   }
 }

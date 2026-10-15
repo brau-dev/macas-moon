@@ -13,9 +13,9 @@ Abre .env.netlify. Este archivo es privado: no lo subas a Git ni lo pegues en el
 | Credenciales Tilopay | Ya escritas. No necesitas volver a registrarte. |
 | SMTP_USER | Ya está macasmoonglamping@gmail.com, confirmado por ti. |
 | SMTP_PASSWORD | Ya incorporada en el archivo privado; Gmail aceptó la autenticación SMTP. |
-| NEXT_PUBLIC_TURNSTILE_SITE_KEY y TURNSTILE_SECRET_KEY | Completa las dos claves contra robots; paso 3. |
+| NEXT_PUBLIC_TURNSTILE_SITE_KEY y TURNSTILE_SECRET_KEY | Deben contener las claves del widget de pruebas; paso 3 si necesitas configurarlas. |
 | ADMIN_USERNAME | Ya está escrito. Será el usuario del panel. |
-| ADMIN_PASSWORD_HASH | El valor actual no tiene formato válido. Genéralo de nuevo; paso 4. |
+| ADMIN_PASSWORD_HASH | Debe contener el hash generado en el paso 4. Si el validador ya lo acepta, no lo regeneres para corregir el pago. |
 | BOOKING_RECONCILE_SECRET | Ya generada y guardada. No la cambies ni la compartas. |
 
 El amplio ya tiene sus enlaces iCal. Puedes probar primero solo ese domo.
@@ -90,6 +90,24 @@ la línea del mismo nombre en .env.netlify. No añadas otra duplicada.
 Con ADMIN_USERNAME y **tu contraseña original** entrarás a /admin, no con el hash.
 
 ## 5. Revisar antes de gastar un deploy
+
+### Corrección del error al abrir Tilopay (14 de octubre de 2026)
+
+Se comprobó que el API genera el enlace de US$0,01, pero devuelve un enlace de
+`https://tilo.co`. El filtro anterior solo aceptaba subdominios de `tilopay.com`:
+rechazaba un enlace legítimo y respondía con error 500 antes de redirigir.
+La lista segura ahora admite exactamente `tilo.co`, `app.tilopay.com` y
+`admin.tilopay.com`, siempre con HTTPS y sin usuario, contraseña ni puerto alternativo.
+`tilo.co` está documentado por el [soporte oficial de Tilopay](https://support.tilopay.com/portal/es/kb/articles/crear-un-link-de-pago).
+
+No hay que cambiar claves, tarifas, iCal ni migraciones por esta corrección.
+La pantalla de pago se abre **en la misma pestaña**, no en una ventana emergente.
+Si falla otra etapa, el formulario muestra una referencia de soporte que permite
+encontrar `Reservation failed` en los registros. Ese registro incluye etapa y motivo
+controlados, nunca claves, enlaces privados, datos del huésped ni el cuerpo del proveedor.
+No se reintenta automáticamente crear enlaces tras un fallo de red.
+
+### Comprobaciones locales
 
 Con Node 24 y dependencias instaladas, ejecuta:
 
