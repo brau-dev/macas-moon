@@ -4,7 +4,8 @@ export type CheckoutStage = "security" | "availability" | "reservation_create" |
   "reservation_read" | "reservation_cleanup" | "tilopay_auth" | "tilopay_link" |
   "tilopay_check" | "payment_link_save";
 type CheckoutReason = "unexpected" | "network" | "timeout" | "http" |
-  "invalid_response" | "rejected" | "missing_token" | "invalid_payment_url";
+  "invalid_response" | "rejected" | "missing_token" | "invalid_payment_url" |
+  "link_mismatch" | "unsupported_payment" | "ambiguous_payment";
 
 // Only application-controlled labels are exposed. Never include provider messages,
 // URLs, request bodies, SQL details, credentials or guest information.

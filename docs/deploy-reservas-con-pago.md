@@ -107,6 +107,24 @@ encontrar `Reservation failed` en los registros. Ese registro incluye etapa y mo
 controlados, nunca claves, enlaces privados, datos del huésped ni el cuerpo del proveedor.
 No se reintenta automáticamente crear enlaces tras un fallo de red.
 
+### Corrección del pago aprobado que no confirmaba la reserva
+
+En la cuenta Test se comprobó una segunda diferencia: los elementos de `payments`
+en `getDetailLinkPayment` traen `id`, importe, moneda, código y fecha, **sin `orderNumber`**.
+El adaptador anterior esperaba `orderNumber` y fallaba antes de confirmar y enviar correos.
+
+El flujo corregido valida el enlace guardado contra la referencia, el importe y la moneda
+de la reserva. Luego busca **ese ID exacto** en `consultTransactions` dentro de un rango
+acotado alrededor de la fecha del pago, obtiene su orden y vuelve a verificarla en `consult`.
+La captura, aprobación, entorno e ID deben coincidir. No se asocia un pago por coincidir
+únicamente en importe, nombre, correo o fecha; tampoco se confía en lo que diga el navegador.
+Se conserva compatibilidad con respuestas que sí incluyan `orderNumber`.
+
+Esto no requiere variables nuevas ni migraciones. El correo propio de Tilopay no sustituye
+la confirmación de Macas Moon: nuestros correos se intentan después de confirmar la reserva.
+El verificador corregido se comprobó con un pago existente mediante consultas de solo lectura;
+eso no confirma la reserva ni envía correos por sí mismo.
+
 ### Comprobaciones locales
 
 Con Node 24 y dependencias instaladas, ejecuta:
@@ -187,8 +205,10 @@ TILOPAY_CHECKOUT_ENABLED=true y NEXT_PUBLIC_BOOKING_TEST_MODE=false.
 
 **Si Tilopay aprueba pero la web sigue pendiente:** usa Verificar pago en /admin.
 No repitas el pago. Si no se confirma, conserva el ID y describe el error sin claves
-ni datos de tarjeta. La respuesta real de pagos asociados al enlace debe comprobarse
-en esta primera integración: el código no confirma si no puede validarla.
+ni datos de tarjeta. La pantalla muestra una referencia de soporte si falla la consulta.
+Si el bloqueo de 30 minutos ya venció, no se confirma automáticamente un pago tardío:
+el administrador debe revisar disponibilidad e incidencia. No modifiques el estado en SQL
+ni vuelvas a cobrar para resolverlo.
 
 **Correo pendiente:** revisa SMTP_PASSWORD, posibles alertas de Google y usa Reintentar correos pendientes
 en el panel. Una conexión local puede ser rechazada desde un servidor nuevo.

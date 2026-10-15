@@ -30,8 +30,12 @@ export function BookingStatus() {
       attempts++;
       try {
         const response = await fetch(`/api/reservations/${id}`, { cache: "no-store", signal: controller.signal });
-        if (!response.ok) throw new Error("No se pudo verificar el estado del pago.");
-        const result = await response.json() as Status;
+        const result = await response.json();
+        if (!response.ok) {
+          const reference = typeof result.requestId === "string" && /^[a-f0-9-]{36}$/.test(result.requestId)
+            ? ` Referencia de soporte: ${result.requestId}.` : "";
+          throw new Error((result.error ?? "No se pudo verificar el estado del pago. No vuelvas a pagar si Tilopay ya lo aprobó.") + reference);
+        }
         if (live) { setStatus(result); setError(""); done = result.status !== "pending"; }
       } catch (reason) { if (live) setError(reason instanceof Error ? reason.message : "Error desconocido"); }
       finally {
@@ -68,7 +72,10 @@ export function BookingStatus() {
     {error ? <p role="alert" className="mt-4 text-red-700">{error}</p> : null}
     {id ? <button type="button" onClick={() => setRefreshVersion((value) => value + 1)}
       className="mt-4 text-sm font-medium text-olive-800 underline">Actualizar estado</button> : null}
-    {!status && id && validReservationId(id) ? <p className="mt-4 text-muted">Verificando el pago…</p> : null}
+    {!status && id && validReservationId(id) ? <p className="mt-4 text-muted">
+      {error ? "La reserva aún no está confirmada. Conserva su identificador y no repitas un pago aprobado." : "Verificando el pago…"}
+      <span className="mt-2 block text-xs">Reserva: {id}</span>
+    </p> : null}
     {status ? <div className="mt-6 space-y-3 text-sm text-ink">
       <p><strong>Reserva:</strong> {status.id}</p>
       <p><strong>Domo:</strong> {status.dome}</p>

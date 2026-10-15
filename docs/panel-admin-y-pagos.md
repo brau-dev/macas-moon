@@ -175,9 +175,11 @@ guardar podría duplicar un correo. No se promete entrega exactamente una vez.
 2. Prueba en el sitio separado con `NEXT_PUBLIC_BOOKING_TEST_MODE=false`,
    `TILOPAY_CHECKOUT_ENABLED=true`, `TILOPAY_EXPECTED_ENVIRONMENT=Test` y credenciales de pruebas.
    No uses tarjetas reales para una prueba sin haber comprobado el modo del comercio.
-3. Confirma con Tilopay el contrato de `getDetailLinkPayment`: la documentación pública no define
-   todos los campos de los elementos de `payments`. El adaptador admite `orderNumber`; si recibe
-   otro contrato falla de forma segura y no confirma. Debe comprobarse con la cuenta de comercio.
+3. El formato real de `getDetailLinkPayment` se comprobó en Test: `payments` puede traer el
+   ID de transacción sin `orderNumber`. El adaptador resuelve ese ID exacto con
+   `consultTransactions` y verifica ID, orden, captura, importe, moneda y entorno con `consult`.
+   También admite el formato con `orderNumber`. Si cambia el contrato o no coinciden los datos,
+   no confirma. Antes de producción, repetir las pruebas con la configuración final del comercio.
 4. Prueba aprobación, rechazo, abandono, retorno sin pago, webhook, correo y confirmación sin
    regresar al sitio. Los tests automáticos simulan Tilopay; no sustituyen estas pruebas.
 5. Mantén `BOOKING_RECONCILE_ENABLED=true`. Netlify invoca el respaldo cada **15 minutos** en

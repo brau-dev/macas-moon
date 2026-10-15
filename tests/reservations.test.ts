@@ -99,6 +99,11 @@ test("reservations, payments, iCal and private administration", async (t) => {
   let authFixture: "success" | "http" | "missing_token" = "success";
   let linkFixture: "success" | "http" | "reject" | "bad_json" | "unsafe_url" |
     "missing_id" | "timeout" | "connection" = "success";
+  let detailFixture: "live" | "legacy" | "wrong_reference" | "missing_id" | "invalid_date" = "live";
+  let transactionFixture: "success" | "unrelated" | "wrong_amount" | "wrong_currency" |
+    "wrong_environment" | "wrong_capture" | "duplicate" | "invalid_response" = "success";
+  let wrongConsultId = false;
+  const transactionRequests: Array<Record<string, unknown>> = [];
   let emailCalls = 0;
   let smtpFailure = false;
   let smtpFailedAudience: "guest" | "owner" | null = null;
@@ -151,13 +156,37 @@ test("reservations, payments, iCal and private administration", async (t) => {
     if (url.includes("/getDetailLinkPayment/")) {
       const id = url.split("/").at(-2)!;
       const link = links.get(id)!;
-      return Response.json({ type: "200", detail: { id: Number(id), reference: link.reference,
-        amount: link.amount, currency: link.currency }, payments: link.approved ? [{ orderNumber: link.order }] : [] });
+      return Response.json({ type: "200", detail: { id: Number(id), reference: detailFixture === "wrong_reference" ? "OTHER_REFERENCE" : link.reference,
+        amount: link.amount, currency: link.currency }, payments: link.approved ? [detailFixture === "legacy"
+          ? { orderNumber: link.order }
+          : { ...(detailFixture === "missing_id" ? {} : { id: 100_000 + Number(id) }),
+            amount: link.amount, currency: link.currency, code: "1",
+            create: detailFixture === "invalid_date" ? "2026-02-30 25:99:00" : "2026-10-14 18:00:00",
+            card: "fixture-brand", response: "Aprobada", email: "guest@example.com", auth: "fixture-auth" }] : [] });
+    }
+    if (url.endsWith("/consultTransactions")) {
+      transactionRequests.push(JSON.parse(String(init?.body)));
+      const rows = [...links.entries()].filter(([, link]) => link.approved).map(([id, link]) => ({
+        id: 100_000 + Number(id), orderNumber: link.order, amount: link.amount, currency: link.currency,
+        code: "1", capture: "Capture", environment: "Test", type: "Payment",
+      }));
+      if (transactionFixture === "invalid_response") return Response.json({ type: "200", response: {} });
+      const result = rows.map((row) => ({ ...row,
+        ...(transactionFixture === "unrelated" ? { id: row.id + 900_000 } : {}),
+        ...(transactionFixture === "wrong_amount" ? { amount: "9999.99" } : {}),
+        ...(transactionFixture === "wrong_currency" ? { currency: "CRC" } : {}),
+        ...(transactionFixture === "wrong_environment" ? { environment: "Production" } : {}),
+        ...(transactionFixture === "wrong_capture" ? { capture: "Authorize" } : {}),
+      }));
+      return Response.json({ type: "200", response: transactionFixture === "duplicate" ? [...result, ...result] : result });
     }
     if (url.endsWith("/consult")) {
       const body = JSON.parse(String(init?.body));
       const link = [...links.values()].find((entry) => entry.order === body.orderNumber);
+      const id = [...links.entries()].find(([, entry]) => entry.order === body.orderNumber)?.[0];
       return Response.json({ type: "200", response: link?.approved ? [{ orderNumber: link.order,
+        id_tilopay: 100_000 + Number(id) + (wrongConsultId ? 1 : 0),
+        merchantId: "fixture-merchant",
         amount: link.amount, currency: link.currency, code: "1", capture: "Capture", environment: "Test", type: "Payment" }] : [] });
     }
     if (url.endsWith("/deleteLinkPayment")) return Response.json({ type: "200" });
@@ -374,6 +403,119 @@ test("reservations, payments, iCal and private administration", async (t) => {
       assert(body.paymentUrl.startsWith("https://tilo.co/link/"));
       assert.equal((await db.getBooking(body.id))!.status, "pending");
       assert(!(await exportIcs()).includes("20290101"));
+    });
+    await t.test("live link payment IDs resolve to the exact authenticated transaction and both notifications", async () => {
+      const result = await service.startReservation(payload("2029-03-01", "2029-03-02"), null, "https://fixture.netlify.app");
+      const booking = (await db.getBooking(result.id))!;
+      links.get(booking.payment_link_id!)!.approved = true;
+      const beforeEmails = emailCalls;
+      const beforeRequests = transactionRequests.length;
+      // Verification alone is read-only: no confirmation or SMTP side effects.
+      assert.equal(await payments.paymentApproved(booking), true);
+      assert.equal((await db.getBooking(result.id))!.status, "pending");
+      assert.equal(emailCalls, beforeEmails);
+      assert.equal(transactionRequests.length, beforeRequests + 1);
+      const request = transactionRequests.at(-1)!;
+      assert.equal(request.startDate, "2026-10-13 00:00:00");
+      assert.equal(request.endDate, "2026-10-15 23:59:59");
+      assert.equal(request.environment, 1);
+      assert.equal(request.onlyAproved, 1);
+      assert.deepEqual(request.currency, ["USD"]);
+      const route = await import("../src/app/api/reservations/[id]/route");
+      const response = await route.GET(new Request(`http://localhost/api/reservations/${result.id}`),
+        { params: Promise.resolve({ id: result.id }) });
+      assert.equal(response.status, 200);
+      const state = await response.json();
+      assert.equal(state.status, "confirmed"); assert.equal(state.emailSent, true);
+      assert.equal(emailCalls, beforeEmails + 2);
+      assert((await db.getBooking(result.id))!.owner_notification_sent_at);
+      await service.reconcilePayment(result.id);
+      assert.equal(emailCalls, beforeEmails + 2);
+    });
+    await t.test("an unrelated approved transaction with the same amount cannot confirm the link", async () => {
+      const booking = (await db.getBooking(paidBookingId))!;
+      try {
+        for (const fixture of ["unrelated", "wrong_amount", "wrong_currency", "wrong_environment", "wrong_capture"] as const) {
+          transactionFixture = fixture;
+          assert.equal(await payments.paymentApproved(booking), false, fixture);
+        }
+        transactionFixture = "success"; wrongConsultId = true;
+        assert.equal(await payments.paymentApproved(booking), false);
+      } finally { transactionFixture = "success"; wrongConsultId = false; }
+    });
+    await t.test("merchant ID is checked in consult even when the transaction list omits it", async () => {
+      const booking = (await db.getBooking(paidBookingId))!;
+      try {
+        process.env.TILOPAY_MERCHANT_ID = "fixture-merchant";
+        assert.equal(await payments.paymentApproved(booking), true);
+        process.env.TILOPAY_MERCHANT_ID = "wrong-merchant";
+        assert.equal(await payments.paymentApproved(booking), false);
+      } finally { delete process.env.TILOPAY_MERCHANT_ID; }
+    });
+    await t.test("ambiguous/unsupported payment details fail safely with useful sanitized diagnostics", async () => {
+      const booking = (await db.getBooking(paidBookingId))!;
+      try {
+        for (const fixture of ["missing_id", "invalid_date", "wrong_reference"] as const) {
+          detailFixture = fixture;
+          await assert.rejects(payments.paymentApproved(booking), { stage: "tilopay_check",
+            reason: fixture === "wrong_reference" ? "link_mismatch" : "unsupported_payment" });
+        }
+        detailFixture = "live"; transactionFixture = "duplicate";
+        await assert.rejects(payments.paymentApproved(booking), { stage: "tilopay_check", reason: "ambiguous_payment" });
+        transactionFixture = "invalid_response";
+        await assert.rejects(payments.paymentApproved(booking), { stage: "tilopay_check", reason: "invalid_response" });
+      } finally { detailFixture = "live"; transactionFixture = "success"; }
+    });
+    await t.test("legacy authenticated orderNumber detail remains supported without history lookup", async () => {
+      const booking = (await db.getBooking(paidBookingId))!;
+      const before = transactionRequests.length;
+      detailFixture = "legacy";
+      try { assert.equal(await payments.paymentApproved(booking), true); assert.equal(transactionRequests.length, before); }
+      finally { detailFixture = "live"; }
+    });
+    await t.test("a forged approval webhook never confirms; a verified one sends each notification only once", async () => {
+      const result = await service.startReservation(payload("2029-03-03", "2029-03-04"), null, "https://fixture.netlify.app");
+      const booking = (await db.getBooking(result.id))!;
+      const webhook = await import("../src/app/api/reservations/webhook/route");
+      const request = () => new Request("https://fixture.netlify.app/api/reservations/webhook", {
+        method: "POST", body: JSON.stringify({ code: "1", tilopayLinkId: Number(booking.payment_link_id), orderNumber: "FORGED_ORDER" }),
+      });
+      const before = emailCalls;
+      assert.equal((await webhook.POST(request())).status, 200);
+      assert.equal((await db.getBooking(result.id))!.status, "pending");
+      assert.equal(emailCalls, before);
+      links.get(booking.payment_link_id!)!.approved = true;
+      assert.equal((await webhook.POST(request())).status, 200);
+      assert.equal((await db.getBooking(result.id))!.status, "confirmed");
+      assert.equal(emailCalls, before + 2);
+      assert.equal((await webhook.POST(request())).status, 200);
+      assert.equal(emailCalls, before + 2);
+    });
+    await t.test("failed status checks return a support reference without personal data or confirming the booking", async () => {
+      const result = await service.startReservation(payload("2029-03-05", "2029-03-06"), null, "https://fixture.netlify.app");
+      const booking = (await db.getBooking(result.id))!;
+      links.get(booking.payment_link_id!)!.approved = true;
+      const route = await import("../src/app/api/reservations/[id]/route");
+      const originalLog = console.error;
+      let logged = "";
+      console.error = (...args) => { logged = JSON.stringify(args); };
+      const before = emailCalls;
+      transactionFixture = "invalid_response";
+      try {
+        const response = await route.GET(new Request("http://localhost"), { params: Promise.resolve({ id: result.id }) });
+        assert.equal(response.status, 503);
+        const body = await response.json();
+        assert.equal(response.headers.get("X-Request-ID"), body.requestId);
+        assert.equal(response.headers.get("Cache-Control"), "no-store");
+        assert(body.error.includes("no vuelvas a pagar"));
+        const details = JSON.parse(logged)[1];
+        assert.equal(details.stage, "tilopay_check");
+        assert.equal(details.reason, "invalid_response");
+        assert.equal(details.requestId, body.requestId);
+        for (const value of ["guest@example.com", "fixture-auth", "fixture-token"]) assert(!(logged + JSON.stringify(body)).includes(value));
+        assert.equal((await db.getBooking(result.id))!.status, "pending");
+        assert.equal(emailCalls, before);
+      } finally { transactionFixture = "success"; console.error = originalLog; }
     });
     await t.test("provider failures identify the stage without exposing credentials and release unpaid nights", async () => {
       const route = await import("../src/app/api/reservations/route");

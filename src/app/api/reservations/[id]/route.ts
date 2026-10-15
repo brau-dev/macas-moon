@@ -3,6 +3,7 @@ import { getBooking } from "@/lib/booking-db";
 import { reconcilePayment } from "@/lib/reservation-service";
 import { validReservationId } from "@/lib/booking-validation";
 import { logServerError } from "@/lib/safe-log";
+import { randomUUID } from "node:crypto";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -21,7 +22,9 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
       emailSent: Boolean(current.confirmation_email_sent_at) },
     { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
-    logServerError("Reservation status failed", error);
-    return NextResponse.json({ error: "No se pudo verificar el pago. Intenta de nuevo." }, { status: 503 });
+    const requestId = randomUUID();
+    logServerError("Reservation status failed", error, requestId);
+    return NextResponse.json({ error: "No se pudo verificar el pago. Si Tilopay ya lo aprobó, no vuelvas a pagar; actualiza el estado o contacta al alojamiento.", requestId },
+      { status: 503, headers: { "Cache-Control": "no-store", "X-Request-ID": requestId } });
   }
 }
