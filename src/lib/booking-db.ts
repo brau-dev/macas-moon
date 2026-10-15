@@ -1,13 +1,20 @@
 import "server-only";
 import { Pool, type PoolClient } from "pg";
 import type { OccupiedRange } from "@/lib/availability-types";
+import { logServerError } from "@/lib/safe-log";
 
 let pool: Pool | undefined;
 
 export function getPool() {
   const connectionString = process.env.NETLIFY_DB_URL || process.env.DATABASE_URL;
   if (!connectionString) throw new Error("Neither NETLIFY_DB_URL nor DATABASE_URL is configured");
-  pool ??= new Pool({ connectionString, max: 3 });
+  if (!pool) {
+    pool = new Pool({ connectionString, max: 3, connectionTimeoutMillis: 10_000,
+      idleTimeoutMillis: 10_000, allowExitOnIdle: true });
+    // A network failure on an idle connection must not become an unhandled
+    // EventEmitter error and terminate the serverless process.
+    pool.on("error", (error) => logServerError("Idle database connection failed", error));
+  }
   return pool;
 }
 
@@ -40,6 +47,13 @@ export type Booking = {
   confirmation_email_sent_at: Date | null;
   owner_notification_sent_at: Date | null;
   owner_notification_required: boolean;
+  cancelled_at: Date | null;
+  cancelled_by: string | null;
+  cancellation_reason: string | null;
+  cancelled_from_status: "pending" | "confirmed" | "expired" | null;
+  cancellation_check_in: string | null;
+  cancellation_check_out: string | null;
+  parent_block_id: string | null;
 };
 
 export const bookingColumns = `id, dome, check_in::text, check_out::text, guests, guest_name, guest_email,
@@ -47,7 +61,9 @@ export const bookingColumns = `id, dome, check_in::text, check_out::text, guests
   billing_country, status, amount_cents, currency, payment_provider,
   payment_reference, expires_at, confirmation_email_sent_at, kind, admin_note,
   payment_link_id, payment_link_closed_at, payment_issue, payment_checked_at,
-  owner_notification_sent_at, owner_notification_required`;
+  owner_notification_sent_at, owner_notification_required, cancelled_at, cancelled_by,
+  cancellation_reason, cancelled_from_status, cancellation_check_in::text,
+  cancellation_check_out::text, parent_block_id`;
 
 export type NewBooking = Pick<Booking, "id" | "dome" | "check_in" | "check_out" | "guests" |
   "guest_name" | "guest_email" | "guest_phone" | "billing_country" | "amount_cents" |

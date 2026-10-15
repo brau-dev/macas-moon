@@ -6,7 +6,8 @@
 > US$0,01 y a un solo domo en esta guía corresponden a la configuración anterior.
 
 Usa solo el proyecto **macasmoon-reservas-testing**, nunca el sitio de macasmoon.com.
-Se mantienen **US$0,01 por noche**, pago obligatorio y Tilopay **Test**.
+La configuración actual usa **US$170 por noche en ambos domos**, pago obligatorio y
+Tilopay **Test**. Los pasos históricos de US$0,01 no deben importarse de nuevo.
 No se han hecho commits, pushes, deploys ni cobros por ti.
 
 ## 1. Qué falta
@@ -23,7 +24,8 @@ Abre .env.netlify. Este archivo es privado: no lo subas a Git ni lo pegues en el
 | ADMIN_PASSWORD_HASH | Debe contener el hash generado en el paso 4. Si el validador ya lo acepta, no lo regeneres para corregir el pago. |
 | BOOKING_RECONCILE_SECRET | Ya generada y guardada. No la cambies ni la compartas. |
 
-El amplio ya tiene sus enlaces iCal. Puedes probar primero solo ese domo.
+Ambos domos requieren sus propios enlaces iCal; usa la configuración actual de la
+guía [Reservas de ambos domos](configuracion-dos-domos.md).
 No necesitas Resend ni comprar un correo con dominio propio.
 
 ## 2. Autorizar Gmail
@@ -55,7 +57,8 @@ llegan al Gmail del negocio; BOOKING_REPLY_TO es opcional para otra dirección.
 Los dueños reciben **otro correo independiente en macasmoonglamping@gmail.com** con nombre,
 correo, teléfono, país, detalles de estancia y pago, ID, referencia y acceso al panel.
 Responder a ese aviso permite contactar al huésped. Solo se envían cuando se confirma la reserva,
-no al empezar el pago, rechazarlo o crear un bloqueo manual. Ambos indican PRUEBA cuando corresponde.
+no al empezar el pago, rechazarlo o crear un bloqueo manual. Las operaciones simuladas
+se describen como «sin cargo real»; los asuntos de correo tienen presentación comercial.
 La migración no genera avisos nuevos a los dueños por reservas históricas.
 
 Si falla un envío después de pagar, **la reserva sigue confirmada**. El panel muestra por separado

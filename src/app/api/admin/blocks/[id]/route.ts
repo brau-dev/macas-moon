@@ -14,7 +14,7 @@ export async function DELETE(request: Request, context: { params: Promise<{ id: 
     await requireAdmin();
     const { id } = await context.params;
     if (!validReservationId(id)) throw new BookingError("Bloqueo inválido.", 400);
-    await removeManualBlock(id);
-    return NextResponse.json({ ok: true, warning: "Comprueba Expedia: puede ser necesario reabrir estas noches manualmente." }, { headers: privateHeaders });
+    const result = await removeManualBlock(id);
+    return NextResponse.json({ ok: true, ...result }, { headers: privateHeaders });
   } catch (error) { return adminError(error); }
 }

@@ -3,7 +3,8 @@ import { randomUUID } from "node:crypto";
 import { getDome } from "@/data/domes";
 import { isDomeActive } from "@/lib/active-domes";
 import { BookingError } from "@/lib/booking-error";
-import { bookingColumns, getPool, releaseExpiredNights, transaction, type Booking } from "@/lib/booking-db";
+import { bookingColumns, getPool, getBooking, releaseExpiredNights, transaction, type Booking } from "@/lib/booking-db";
+import { cancelLocalReservation } from "@/lib/admin-cancellation";
 import { cleanField, validateStay } from "@/lib/booking-validation";
 import { getCalendarSources } from "@/lib/ical";
 import { getCombinedAvailability } from "@/lib/combined-availability";
@@ -17,7 +18,6 @@ export async function adminCalendar(dome: string, start: string, end: string, re
   // An administrator can inspect either property even before online sales are enabled.
   // Mutations still require an active dome and fully verified calendars.
   if (!getDome(dome)) throw new BookingError("Domo desconocido.", 400);
-  await transaction(releaseExpiredNights);
   const [imported, reservations, issues] = await Promise.all([
     getCalendarSources(dome, refresh),
     getPool().query<Booking>(`SELECT ${bookingColumns} FROM reservations
@@ -25,12 +25,22 @@ export async function adminCalendar(dome: string, start: string, end: string, re
     getPool().query<Booking>(`SELECT ${bookingColumns} FROM reservations
       WHERE dome = $1 AND payment_issue IS NOT NULL ORDER BY created_at DESC LIMIT 50`, [dome]),
   ]);
+  // Viewing a calendar must not run cleanup transactions. Expired holds are
+  // displayed correctly without writes; booking/block creation still releases
+  // them atomically before acquiring the unique night rows.
+  const now = Date.now();
   const expose = (row: Booking) => ({ id: row.id, dome: row.dome, checkIn: row.check_in, checkOut: row.check_out,
-    kind: row.kind, status: row.status, name: row.guest_name, email: row.guest_email, phone: row.guest_phone,
+    kind: row.kind, status: row.status === "pending" && row.expires_at && row.expires_at.valueOf() <= now ? "expired" : row.status,
+    name: row.guest_name, email: row.guest_email, phone: row.guest_phone,
     country: row.billing_country, guests: row.guests, amountCents: row.amount_cents, currency: row.currency,
     provider: row.payment_provider, note: row.admin_note, expiresAt: row.expires_at?.toISOString() ?? null,
     emailSent: Boolean(row.confirmation_email_sent_at), ownerEmailRequired: row.owner_notification_required,
-    ownerEmailSent: Boolean(row.owner_notification_sent_at), paymentIssue: row.payment_issue });
+    ownerEmailSent: Boolean(row.owner_notification_sent_at), paymentIssue: row.payment_issue,
+    cancelledAt: row.cancelled_at?.toISOString() ?? null, cancelledBy: row.cancelled_by,
+    cancellationReason: row.cancellation_reason, cancelledFrom: row.cancelled_from_status,
+    cancellationStart: row.cancellation_check_in, cancellationEnd: row.cancellation_check_out,
+    parentBlockId: row.parent_block_id,
+    paymentLinkPending: Boolean(row.status === "cancelled" && row.payment_link_id && !row.payment_link_closed_at) });
   return { dome, bookingEnabled: isDomeActive(dome), reservations: reservations.rows.map(expose), issues: issues.rows.map(expose),
     imported: imported.map((source) => ({ ...source,
       blocked: source.blocked.filter((range) => range.start < end && range.end > start) })),
@@ -70,10 +80,8 @@ export async function createManualBlock(body: Record<string, unknown>) {
 }
 
 export async function removeManualBlock(id: string) {
-  return transaction(async (client) => {
-    const { rows } = await client.query(`UPDATE reservations SET status = 'cancelled'
-      WHERE id = $1 AND kind = 'manual' AND status = 'confirmed' RETURNING id`, [id]);
-    if (!rows.length) throw new BookingError("Bloqueo activo no encontrado.", 404);
-    await client.query("DELETE FROM reservation_nights WHERE reservation_id = $1", [id]);
-  });
+  const booking = await getBooking(id);
+  if (!booking || booking.kind !== "manual") throw new BookingError("Bloqueo no encontrado.", 404);
+  return cancelLocalReservation(id, { dome: booking.dome, reason: "Retiro de bloqueo desde el panel",
+    acknowledged: true }, process.env.ADMIN_USERNAME ?? "administrador", true);
 }

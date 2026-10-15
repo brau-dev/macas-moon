@@ -9,6 +9,8 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "check:netlify-env": "node scripts/check-netlify-staging-env.mjs",
+    "check:deploy": "node scripts/check-deploy.mjs",
+    "check:published": "node scripts/check-published-site.mjs",
     "admin:password": "node scripts/hash-admin-password.mjs",
     "audit:exposure": "node scripts/audit-exposure.mjs",
     "media:privacy": "node scripts/sanitize-public-media.mjs",

@@ -5,6 +5,18 @@ import { createHash } from "node:crypto";
 import { Module } from "node:module";
 import { PGlite } from "@electric-sql/pglite";
 import { hashAdminPassword, verifyAdminPassword } from "../src/lib/admin-password.mjs";
+import type { AdminReservation } from "../src/lib/admin-calendar-view";
+
+function adminReservationFixture(change: Partial<AdminReservation> = {}): AdminReservation {
+  return { id: "00000000-0000-4000-8000-000000000099", dome: "domo-amplio",
+    checkIn: "2031-06-01", checkOut: "2031-06-03", kind: "booking", status: "confirmed",
+    name: "Fixture Guest", email: "guest@example.com", phone: "+50688888888", country: "CR", guests: 2,
+    amountCents: 34000, currency: "USD", provider: "tilopay", note: "", expiresAt: null,
+    emailSent: true, ownerEmailRequired: true, ownerEmailSent: true, paymentIssue: null,
+    cancelledAt: null, cancelledBy: null, cancellationReason: null, cancelledFrom: null,
+    cancellationStart: null, cancellationEnd: null, parentBlockId: null, paymentLinkPending: false,
+    ...change };
+}
 
 // SQL runs against disposable in-memory PostgreSQL. All HTTP calls are fixtures.
 // No .env files are loaded, no real calendars are read, and no payments are sent.
@@ -32,9 +44,17 @@ test("reservations, payments, iCal and private administration", async (t) => {
   await sql.exec(notifications);
   assert.equal(notifications, readFileSync("netlify/database/migrations/0003_owner_notifications.sql", "utf8"));
   assert.equal((await sql.query<{ owner_notification_required: boolean }>("SELECT owner_notification_required FROM reservations WHERE id = $1", [legacyId])).rows[0].owner_notification_required, false);
+  const cancellations = readFileSync("db/004_admin_cancellations.sql", "utf8");
+  await sql.exec(cancellations);
+  await sql.exec(cancellations);
+  assert.equal(cancellations, readFileSync("netlify/database/migrations/0004_admin_cancellations.sql", "utf8"));
 
   let queue = Promise.resolve();
   let failBookingRead = false;
+  let failSplitInsert = false;
+  const executedSql: string[] = [];
+  let poolOptions: Record<string, unknown> = {};
+  let idleErrorHandler: ((error: Error) => void) | undefined;
   async function acquire() {
     const previous = queue;
     let release!: () => void;
@@ -43,10 +63,17 @@ test("reservations, payments, iCal and private administration", async (t) => {
     return release;
   }
   const query = async (text: string, args?: unknown[]) => {
+    executedSql.push(text);
+    if (failSplitInsert && /^INSERT INTO reservations/.test(text) && text.includes("parent_block_id")) {
+      failSplitInsert = false;
+      throw new Error("Fixture: could not preserve the remaining block");
+    }
     const result = await sql.query(text, args);
     return { rows: result.rows, rowCount: result.affectedRows ?? result.rows.length };
   };
   class TestPool {
+    constructor(options: Record<string, unknown>) { poolOptions = options; }
+    on(event: string, handler: (error: Error) => void) { if (event === "error") idleErrorHandler = handler; }
     async query(text: string, args?: unknown[]) {
       if (failBookingRead && text.startsWith("SELECT id, dome, check_in::text")) {
         failBookingRead = false;
@@ -96,6 +123,9 @@ test("reservations, payments, iCal and private administration", async (t) => {
   const links = new Map<string, Link>();
   let paymentBody: Record<string, unknown> | null = null;
   let createdPayments = 0;
+  let detailCalls = 0;
+  let closedLinks = 0;
+  let closeLinkFailure = false;
   let loginCalls = 0;
   let authFixture: "success" | "http" | "missing_token" = "success";
   let linkFixture: "success" | "http" | "reject" | "bad_json" | "unsafe_url" |
@@ -156,6 +186,7 @@ test("reservations, payments, iCal and private administration", async (t) => {
         ...(linkFixture === "missing_id" ? {} : { id: Number(id) }) });
     }
     if (url.includes("/getDetailLinkPayment/")) {
+      detailCalls++;
       const id = url.split("/").at(-2)!;
       const link = links.get(id)!;
       return Response.json({ type: "200", detail: { id: Number(id), reference: detailFixture === "wrong_reference" ? "OTHER_REFERENCE" : link.reference,
@@ -191,7 +222,7 @@ test("reservations, payments, iCal and private administration", async (t) => {
         merchantId: "fixture-merchant",
         amount: link.amount, currency: link.currency, code: "1", capture: "Capture", environment: "Test", type: "Payment" }] : [] });
     }
-    if (url.endsWith("/deleteLinkPayment")) return Response.json({ type: "200" });
+    if (url.endsWith("/deleteLinkPayment")) { closedLinks++; return Response.json({ type: closeLinkFailure ? "503" : "200" }); }
     throw new Error(`Unexpected network request in tests: ${new URL(url).hostname}`);
   };
 
@@ -729,6 +760,41 @@ test("reservations, payments, iCal and private administration", async (t) => {
       assert(!(await exportIcs()).includes("20281001"));
       feedEvent = "";
     });
+    await t.test("iCal exports stay available when sales are disabled and retain RFC line folding", async () => {
+      const savedActive = process.env.BOOKING_ACTIVE_DOMES;
+      try {
+        process.env.BOOKING_ACTIVE_DOMES = "domo-amplio";
+        const known = await exportRoute.GET(new Request("http://localhost/calendar"), { params: Promise.resolve({ dome: "domo-romantico" }) });
+        assert.equal(known.status, 200);
+        assert.match(known.headers.get("content-type")!, /^text\/calendar/);
+        assert.match(known.headers.get("content-disposition")!, /domo-romantico\.ics/);
+        const emptyFeed = await known.text();
+        assert(emptyFeed.startsWith("BEGIN:VCALENDAR\r\n"));
+        assert(emptyFeed.endsWith("END:VCALENDAR\r\n"));
+        assert.deepEqual(ical.parseIcal(emptyFeed), []);
+        process.env.BOOKING_ACTIVE_DOMES = "domo-romantico";
+        const closedWide = await exportRoute.GET(new Request("http://localhost/calendar"), { params: Promise.resolve({ dome: "domo-amplio" }) });
+        assert.equal(closedWide.status, 200);
+        const existingFeed = await closedWide.text();
+        assert(ical.parseIcal(existingFeed).length > 0);
+        assert(!existingFeed.includes("guest@example.com"));
+        assert(!existingFeed.includes("Test Guest"));
+      } finally {
+        if (savedActive === undefined) delete process.env.BOOKING_ACTIVE_DOMES;
+        else process.env.BOOKING_ACTIVE_DOMES = savedActive;
+      }
+      const unknown = await exportRoute.GET(new Request("http://localhost/calendar"), { params: Promise.resolve({ dome: "invalid" }) });
+      assert.equal(unknown.status, 404);
+      const { serializeIcal } = await import("../src/lib/ical-export");
+      const source = ["BEGIN:VCALENDAR", "UID:" + "a".repeat(64) + "@macasmoon.com", "SUMMARY:" + "á🌙".repeat(40), "END:VCALENDAR"];
+      const serialized = serializeIcal(source);
+      assert.equal(serialized.replace(/\r\n /g, ""), source.join("\r\n") + "\r\n");
+      assert(serialized.split("\r\n").every((line) => Buffer.byteLength(line, "utf8") <= 75));
+      const feed = await exportIcs();
+      assert(feed.endsWith("END:VCALENDAR\r\n"));
+      assert(feed.split("\r\n").every((line) => Buffer.byteLength(line, "utf8") <= 75));
+      assert(ical.parseIcal(feed).length > 0);
+    });
     await t.test("invalid countries, inactive dome and tampered prices are rejected", async () => {
       await assert.rejects(service.startReservation({ ...payload("2028-11-01", "2028-11-02"), country: "ZZ" }, testKey, "http://localhost"), { status: 400 });
       await assert.rejects(service.startReservation({ ...payload("2028-11-01", "2028-11-02"), dome: "domo-romantico" }, testKey, "http://localhost"), { status: 503 });
@@ -856,15 +922,31 @@ test("reservations, payments, iCal and private administration", async (t) => {
       const { AdminDashboard } = await import("../src/components/admin/AdminDashboard");
       const { getAdminDomeOptions } = await import("../src/lib/active-domes");
       const router = { bfcacheId: "fixture", back() {}, forward() {}, refresh() {}, hmrRefresh() {}, push() {}, replace() {}, prefetch() {} };
-      const render = (environment: string) => renderToStaticMarkup(createElement(AppRouterContext.Provider,
+      const render = (environment: string, missing: string[] = [], emailMissing: string[] = []) => renderToStaticMarkup(createElement(AppRouterContext.Provider,
         { value: router }, createElement(AdminDashboard, { domes: getAdminDomeOptions(),
-          checkout: { enabled: true, freeTest: false, environment, missing: [], emailMissing: [] }, siteOrigin: "https://fixture.netlify.app" })));
+          checkout: { enabled: true, freeTest: false, environment, missing, emailMissing }, siteOrigin: "https://fixture.netlify.app" })));
       const html = render("Production");
       assert(html.includes('value="domo-romantico"')); assert(html.includes('value="domo-amplio"'));
       assert(html.includes("Ver calendario de")); assert(html.includes("Romántico")); assert(html.includes("Amplio"));
+      assert(html.includes("Mostrar historial"));
       assert(!/\b(?:pruebas?|simulad[oa]s?|test)\b/i.test(html));
       assert(html.includes("https://fixture.netlify.app/api/calendar/domo-amplio/calendar.ics"));
-      assert(render("Test").includes("Operaciones sin cargos reales"));
+      for (const environment of ["Test", "Production"]) {
+        const clean = render(environment);
+        assert(!clean.includes("Operaciones sin cargos reales"));
+        assert(!clean.includes("Estas opciones no verifican"));
+        assert(!clean.includes("reaperturas en Expedia"));
+        assert(!clean.includes("El motivo y los datos de huéspedes nunca aparecen en el iCal público."));
+        assert(!clean.includes("Motivo privado"));
+        assert(clean.includes("Motivo"));
+        assert(!clean.includes("Falta configurar:"));
+        assert(!clean.includes("Correo pendiente de configurar:"));
+        assert(!clean.includes('role="alert"'));
+      }
+      const incomplete = render("Test", ["TURNSTILE_SECRET_KEY"], ["SMTP_PASSWORD"]);
+      assert(incomplete.includes('role="alert"'));
+      assert(incomplete.includes("Falta configurar: TURNSTILE_SECRET_KEY"));
+      assert(incomplete.includes("Correo pendiente de configurar: SMTP_PASSWORD"));
     });
     await t.test("commercial emails have no trial labels; simulated payments are never described as money charged", async () => {
       const { bookingEmails } = await import("../src/lib/booking-email-content");
@@ -913,6 +995,364 @@ test("reservations, payments, iCal and private administration", async (t) => {
       values.set("BOOKING_TEST_SECRET", "fixture_only_".repeat(4));
       assert.deepEqual(validateBookingEnv(values).errors, []);
       assert(validateBookingEnv(values, { production: true }).errors.length > 0);
+    });
+    await t.test("published pricing checks detect old Netlify values without reading secrets or creating bookings", async () => {
+      const { comparePublishedPricing } = await import("../scripts/booking-env.mjs");
+      const values = new Map([
+        ["BOOKING_ACTIVE_DOMES", "domo-romantico,domo-amplio"], ["BOOKING_CURRENCY", "USD"],
+        ["PRICE_DOMO_ROMANTICO_CENTS", "17000"], ["PRICE_DOMO_AMPLIO_CENTS", "17000"],
+      ]);
+      const both = { currency: "USD", perNight: { "domo-romantico": 17000, "domo-amplio": 17000 } };
+      assert.deepEqual(comparePublishedPricing(values, both), []);
+      const stale = comparePublishedPricing(values, { currency: "USD", perNight: { "domo-amplio": 1 } });
+      assert(stale.some((error: string) => error.includes("BOOKING_ACTIVE_DOMES")));
+      assert(stale.some((error: string) => error.includes("PRICE_DOMO_AMPLIO_CENTS")));
+      assert(comparePublishedPricing(values, { ...both, currency: "CRC" }).some((error: string) => error.includes("BOOKING_CURRENCY")));
+      assert(comparePublishedPricing(values, { ...both, perNight: { ...both.perNight, "domo-amplio": "17000" } }).length > 0);
+      for (const invalid of [null, [], {}, { perNight: [] }]) assert(comparePublishedPricing(values, invalid).length > 0);
+      values.set("BOOKING_ACTIVE_DOMES", "domo-amplio");
+      assert(comparePublishedPricing(values, both).some((error: string) => error.includes("desactivado")));
+    });
+    await t.test("administrative cancellation requires authentication, confirmation, reason and financial acknowledgement", async () => {
+      const cancellation = await import("../src/lib/admin-cancellation");
+      const api = await import("../src/app/api/admin/reservations/[id]/route");
+      const result = await service.startReservation(payload("2030-01-01", "2030-01-02"), null, "https://fixture.netlify.app");
+      const input = { dome: "domo-amplio", reason: "Solicitud del huésped", acknowledged: true, acknowledgeNoRefund: true };
+      const context = { params: Promise.resolve({ id: result.id }) };
+      const request = (origin: string) => new Request("http://localhost/api/admin/reservations/" + result.id, {
+        method: "POST", headers: { origin, "content-type": "application/json" }, body: JSON.stringify({ action: "cancel", ...input }),
+      });
+      cookieValues.clear();
+      assert.equal((await api.POST(request("http://localhost"), context)).status, 401);
+      assert.equal((await api.POST(request("https://attacker.example"), context)).status, 403);
+      for (const change of [{ reason: " " }, { reason: "ab" }, { acknowledged: false }, { acknowledgeNoRefund: false }]) {
+        await assert.rejects(cancellation.cancelLocalReservation(result.id, { ...input, ...change }, "owner"), { status: 400 });
+      }
+      await assert.rejects(cancellation.cancelLocalReservation(result.id, { ...input, dome: "domo-romantico" }, "owner"), { status: 404 });
+      await assert.rejects(cancellation.cancelLocalReservation(result.id, { ...input, start: "2030-01-01", end: "2030-01-03" }, "owner"), { status: 400 });
+      assert.equal((await db.getBooking(result.id))!.status, "pending");
+      const token = await auth.loginAdmin("owner", "A-private-test-password!", new Request("http://localhost"));
+      cookieValues.set(auth.ADMIN_COOKIE, token);
+      const response = await api.POST(request("http://localhost"), context);
+      assert.equal(response.status, 200);
+      assert.match(response.headers.get("cache-control")!, /no-store/);
+      assert((await response.json()).warning.includes("no realiza ni acredita un reembolso"));
+      const row = (await db.getBooking(result.id))!;
+      assert.equal(row.status, "cancelled"); assert.equal(row.cancelled_by, "owner");
+      assert.equal(row.cancellation_reason, input.reason); assert(row.cancelled_at);
+      assert.equal(row.cancelled_from_status, "pending"); assert(row.payment_link_closed_at);
+      await auth.logoutAdmin(); cookieValues.clear();
+    });
+    await t.test("cancelling a paid reservation preserves money/history and cannot reactivate or release another booking", async () => {
+      const { cancelLocalReservation } = await import("../src/lib/admin-cancellation");
+      const result = await service.startReservation(payload("2030-02-01", "2030-02-02"), null, "https://fixture.netlify.app");
+      const pending = (await db.getBooking(result.id))!;
+      links.get(pending.payment_link_id!)!.approved = true;
+      assert.equal((await service.reconcilePayment(result.id)).status, "confirmed");
+      const beforeEmails = emailCalls;
+      const beforePayments = createdPayments;
+      const body = { dome: "domo-amplio", reason: "Cancelación acordada tras revisar el reembolso", acknowledged: true, acknowledgeNoRefund: true };
+      await cancelLocalReservation(result.id, body, "owner");
+      const cancelled = (await db.getBooking(result.id))!;
+      assert.equal(cancelled.status, "cancelled"); assert.equal(cancelled.cancelled_from_status, "confirmed");
+      assert.equal(cancelled.amount_cents, pending.amount_cents);
+      assert.equal(cancelled.payment_reference, pending.payment_reference);
+      assert(cancelled.confirmation_email_sent_at); assert(cancelled.owner_notification_sent_at);
+      assert(!((await exportIcs()).includes(createHash("sha256").update(result.id).digest("hex"))));
+      const replacement = await service.startReservation(payload("2030-02-01", "2030-02-02"), null, "https://fixture.netlify.app");
+      const repeat = await cancelLocalReservation(result.id, { ...body, reason: "No reemplazar el motivo original" }, "another-admin");
+      assert(repeat.alreadyCancelled);
+      const afterRepeat = (await db.getBooking(result.id))!;
+      assert.equal(afterRepeat.cancellation_reason, body.reason); assert.equal(afterRepeat.cancelled_by, "owner");
+      const owners = await sql.query<{ reservation_id: string }>("SELECT reservation_id FROM reservation_nights WHERE dome='domo-amplio' AND night='2030-02-01'");
+      assert.deepEqual(owners.rows.map((row) => row.reservation_id), [replacement.id]);
+      const beforeChecks = detailCalls;
+      assert.equal((await service.reconcilePayment(result.id)).status, "cancelled");
+      assert.equal(detailCalls, beforeChecks); assert.equal(emailCalls, beforeEmails);
+      assert.equal(createdPayments, beforePayments + 1);
+    });
+    await t.test("partial manual release atomically retains other nights and exports neither audit nor cancelled originals", async () => {
+      const { cancelLocalReservation } = await import("../src/lib/admin-cancellation");
+      const oldActive = process.env.BOOKING_ACTIVE_DOMES;
+      try {
+        process.env.BOOKING_ACTIVE_DOMES = "domo-romantico,domo-amplio";
+        const original = await manual.createManualBlock({ dome: "domo-amplio", checkIn: "2030-03-01", checkOut: "2030-03-06", note: "PRIVATE maintenance" });
+        const other = await manual.createManualBlock({ dome: "domo-romantico", checkIn: "2030-03-01", checkOut: "2030-03-06", note: "Otro domo" });
+        const body = { dome: "domo-amplio", start: "2030-03-03", end: "2030-03-04", reason: "PRIVATE corrección del bloqueo", acknowledged: true };
+        await assert.rejects(cancelLocalReservation(original, { ...body, start: "2030-02-28" }, "owner"), { status: 400 });
+        await assert.rejects(cancelLocalReservation(original, { ...body, start: body.end }, "owner"), { status: 400 });
+        const replies = await Promise.all([cancelLocalReservation(original, body, "owner"), cancelLocalReservation(original, body, "owner")]);
+        assert.equal(replies.filter((reply) => reply.alreadyCancelled).length, 1);
+        const children = await sql.query<{ id: string; check_in: string; check_out: string }>("SELECT id,check_in::text,check_out::text FROM reservations WHERE parent_block_id=$1 ORDER BY check_in", [original]);
+        assert.deepEqual(children.rows.map((row) => [row.check_in, row.check_out]), [["2030-03-01", "2030-03-03"], ["2030-03-04", "2030-03-06"]]);
+        const nights = await sql.query<{ night: string }>("SELECT night::text FROM reservation_nights WHERE dome='domo-amplio' AND night >= '2030-03-01' AND night < '2030-03-06' ORDER BY night");
+        assert.deepEqual(nights.rows.map((row) => row.night), ["2030-03-01", "2030-03-02", "2030-03-04", "2030-03-05"]);
+        assert.equal((await db.getBooking(other))!.status, "confirmed");
+        const feed = await exportIcs();
+        assert(!feed.includes("PRIVATE")); assert(!feed.includes(createHash("sha256").update(original).digest("hex")));
+        assert.deepEqual(ical.parseIcal(feed).filter((range) => range.start >= "2030-03-01" && range.start < "2030-03-06").sort((a, b) => a.start.localeCompare(b.start)),
+          [{ start: "2030-03-01", end: "2030-03-03" }, { start: "2030-03-04", end: "2030-03-06" }]);
+        const calendar = await manual.adminCalendar("domo-amplio", "2030-03-01", "2030-04-01", false);
+        const audit = calendar.reservations.find((row) => row.id === original)!;
+        assert.equal(audit.cancellationStart, body.start); assert.equal(audit.cancellationEnd, body.end);
+        assert.equal(audit.cancelledBy, "owner"); assert.equal(audit.cancellationReason, body.reason);
+        // A disabled unit may still be cancelled safely; only creating new blocks is gated.
+        process.env.BOOKING_ACTIVE_DOMES = "domo-amplio";
+        await cancelLocalReservation(other, { dome: "domo-romantico", reason: "Bloqueo ya innecesario", acknowledged: true }, "owner");
+        assert.equal((await db.getBooking(other))!.status, "cancelled");
+      } finally { process.env.BOOKING_ACTIVE_DOMES = oldActive; }
+    });
+    await t.test("a failed partial release rolls back the original block, its audit and all night changes", async () => {
+      const { cancelLocalReservation } = await import("../src/lib/admin-cancellation");
+      const id = await manual.createManualBlock({ dome: "domo-amplio", checkIn: "2030-03-10", checkOut: "2030-03-15", note: "Mantenimiento" });
+      failSplitInsert = true;
+      try {
+        await assert.rejects(cancelLocalReservation(id, { dome: "domo-amplio", start: "2030-03-12", end: "2030-03-13",
+          reason: "Corrección de una noche", acknowledged: true }, "owner"));
+      } finally { failSplitInsert = false; }
+      const original = (await db.getBooking(id))!;
+      assert.equal(original.status, "confirmed"); assert.equal(original.cancelled_at, null);
+      assert.equal((await sql.query("SELECT night FROM reservation_nights WHERE reservation_id=$1", [id])).rows.length, 5);
+      assert.equal((await sql.query("SELECT id FROM reservations WHERE parent_block_id=$1", [id])).rows.length, 0);
+    });
+    await t.test("cancellation and payment races never confirm released nights, and closure failures keep cancellation committed", async () => {
+      const { cancelLocalReservation } = await import("../src/lib/admin-cancellation");
+      const result = await service.startReservation(payload("2030-04-01", "2030-04-02"), null, "https://fixture.netlify.app");
+      links.get((await db.getBooking(result.id))!.payment_link_id!)!.approved = true;
+      const originalLog = console.error;
+      console.error = () => {};
+      try {
+        closeLinkFailure = true;
+        const outcomes = await Promise.allSettled([
+          service.reconcilePayment(result.id),
+          cancelLocalReservation(result.id, { dome: "domo-amplio", reason: "Cambio solicitado por el huésped", acknowledged: true, acknowledgeNoRefund: true }, "owner"),
+        ]);
+        assert.equal(outcomes[1].status, "fulfilled");
+        if (outcomes[1].status === "fulfilled") assert(outcomes[1].value.warning.includes("No se pudo cerrar el enlace"));
+        assert.equal((await db.getBooking(result.id))!.status, "cancelled");
+        assert.equal((await sql.query("SELECT night FROM reservation_nights WHERE reservation_id=$1", [result.id])).rows.length, 0);
+        assert.equal((await db.getBooking(result.id))!.payment_link_closed_at, null);
+      } finally { closeLinkFailure = false; console.error = originalLog; }
+    });
+    await t.test("cancellation dialog discloses refund limits and allows partial dates only for manual blocks", async () => {
+      const { createElement } = await import("react");
+      const { renderToStaticMarkup } = await import("react-dom/server");
+      const { AdminCancellationDialog } = await import("../src/components/admin/AdminCancellationDialog");
+      const target = { id: "00000000-0000-4000-8000-000000000099", dome: "domo-amplio", kind: "booking" as const,
+        provider: "tilopay", name: "Fixture Guest", checkIn: "2030-06-01", checkOut: "2030-06-03" };
+      const props = { target, domeName: "Domo Amplio", busy: false, error: "", onClose() {}, async onConfirm() {} };
+      const booking = renderToStaticMarkup(createElement(AdminCancellationDialog, props));
+      assert(booking.includes("no realiza ni acredita un reembolso")); assert(booking.includes("Motivo"));
+      assert(!booking.includes('type="date"')); assert(booking.includes("Confirmar liberación"));
+      assert(booking.includes("Liberar fechas")); assert(!booking.includes("Anular reserva"));
+      const block = renderToStaticMarkup(createElement(AdminCancellationDialog, { ...props, target: { ...target, kind: "manual", provider: "manual" } }));
+      assert.equal((block.match(/type="date"/g) ?? []).length, 2); assert(block.includes("Confirmar liberación"));
+      assert(block.includes("Liberar fechas")); assert(!block.includes("Liberar noches del bloqueo"));
+    });
+    await t.test("calendar date details isolate each dome, ignore inactive attempts and exclude checkout nights", async () => {
+      const { getAdminDayReservations, getAdminDaySources, isActiveAdminReservation } = await import("../src/lib/admin-calendar-view");
+      const now = Date.parse("2031-05-01T12:00:00Z");
+      const confirmed = adminReservationFixture();
+      const live = adminReservationFixture({ id: "pending-live", status: "pending", expiresAt: new Date(now + 60_000).toISOString() });
+      const manualBlock = adminReservationFixture({ id: "manual", kind: "manual", provider: "manual" });
+      const other = adminReservationFixture({ id: "other-dome", dome: "domo-romantico" });
+      const rows = [confirmed, live, manualBlock, other,
+        adminReservationFixture({ status: "expired" }), adminReservationFixture({ status: "cancelled" }),
+        adminReservationFixture({ status: "pending", expiresAt: new Date(now - 1).toISOString() }),
+        adminReservationFixture({ status: "pending", expiresAt: "invalid" })];
+      assert.deepEqual(getAdminDayReservations(rows, "domo-amplio", "2031-06-01", now), [confirmed, live, manualBlock]);
+      assert.deepEqual(getAdminDayReservations(rows, "domo-romantico", "2031-06-02", now), [other]);
+      for (const day of ["2031-06-03", "2031-05-31", "invalid", "2031-02-31"]) {
+        assert.deepEqual(getAdminDayReservations(rows, "domo-amplio", day, now), []);
+      }
+      assert.equal(isActiveAdminReservation(live, now + 60_000), false);
+      const external = [{ name: "Expedia" as const, status: "ready" as const,
+        blocked: [{ start: "2031-06-01", end: "2031-06-03" }], checkedAt: null }];
+      assert.deepEqual(getAdminDaySources(external, "2031-06-01"), external);
+      assert.deepEqual(getAdminDaySources(external, "2031-06-03"), []);
+      assert.deepEqual(getAdminDaySources(external, "invalid"), []);
+    });
+    await t.test("private date popover shows actual guest details, escapes text and uses one release action", async () => {
+      const { createElement } = await import("react");
+      const { renderToStaticMarkup } = await import("react-dom/server");
+      const { AdminDayDetailsPopover } = await import("../src/components/admin/AdminDayDetailsPopover");
+      const row = adminReservationFixture({ name: "Guest <script>alert(1)</script>" });
+      const props = { anchor: {} as HTMLButtonElement, day: "2031-06-01", dome: "domo-amplio", domeName: "Domo Amplio",
+        reservations: [row, adminReservationFixture({ dome: "domo-romantico", name: "Other Property Guest" }),
+          adminReservationFixture({ status: "cancelled", name: "Cancelled Guest" })],
+        sources: [], environment: "Test", busy: false, onClose() {}, onRelease() {} };
+      const html = renderToStaticMarkup(createElement(AdminDayDetailsPopover, props));
+      assert(html.includes('role="dialog"')); assert(html.includes("Cerrar detalles de la fecha"));
+      assert(html.includes("&lt;script&gt;")); assert(!html.includes("<script>"));
+      assert(html.includes("guest@example.com")); assert(html.includes("+50688888888"));
+      assert(html.includes("2 huéspedes")); assert(html.includes("Costa Rica")); assert(html.includes("2 noches"));
+      assert(html.includes("340")); assert(html.includes("Sin cargo real"));
+      assert(!html.includes("Other Property Guest")); assert(!html.includes("Cancelled Guest"));
+      assert.equal((html.match(/>Liberar fechas</g) ?? []).length, 1);
+      assert(!html.includes("Anular reserva"));
+      const block = renderToStaticMarkup(createElement(AdminDayDetailsPopover, { ...props,
+        reservations: [adminReservationFixture({ kind: "manual", provider: "manual", note: "Mantenimiento" })] }));
+      assert(block.includes("Bloqueo manual")); assert(block.includes("Mantenimiento"));
+      assert(!block.includes("guest@example.com")); assert(!block.includes("Huéspedes y residencia"));
+      assert.equal((block.match(/>Liberar fechas</g) ?? []).length, 1);
+    });
+    await t.test("imported-only date details never invent guest information or allow external cancellation", async () => {
+      const { createElement } = await import("react");
+      const { renderToStaticMarkup } = await import("react-dom/server");
+      const { AdminDayDetailsPopover } = await import("../src/components/admin/AdminDayDetailsPopover");
+      const html = renderToStaticMarkup(createElement(AdminDayDetailsPopover, {
+        anchor: {} as HTMLButtonElement, day: "2031-06-01", dome: "domo-amplio", domeName: "Domo Amplio",
+        reservations: [adminReservationFixture({ dome: "domo-romantico", name: "Private Foreign Guest" })],
+        sources: [{ name: "Airbnb", status: "ready", blocked: [{ start: "2031-06-01", end: "2031-06-03" }], checkedAt: null }],
+        environment: "Test", busy: false, onClose() {}, onRelease() {},
+      }));
+      assert(html.includes("Airbnb")); assert(html.includes("iCal no proporciona los datos de huéspedes"));
+      assert(!html.includes("Private Foreign Guest")); assert(!html.includes("guest@example.com"));
+      assert(!html.includes('href="mailto:')); assert(!html.includes(">Liberar fechas<"));
+    });
+    await t.test("database connections are bounded and idle errors never expose private driver messages", async () => {
+      assert.equal(poolOptions.max, 3);
+      assert.equal(poolOptions.connectionTimeoutMillis, 10_000);
+      assert.equal(poolOptions.idleTimeoutMillis, 10_000);
+      assert.equal(poolOptions.allowExitOnIdle, true);
+      assert(idleErrorHandler);
+      const originalLog = console.error;
+      let logged = "";
+      console.error = (...args) => { logged += JSON.stringify(args); };
+      try { idleErrorHandler(Object.assign(new Error("Private connection URL password guest@example.com"), { code: "08006" })); }
+      finally { console.error = originalLog; }
+      assert(logged.includes("08006"));
+      assert(!logged.includes("password")); assert(!logged.includes("guest@example.com"));
+    });
+    await t.test("viewing admin calendars is read-only and expired nights remain safely reusable", async () => {
+      const original = await service.startReservation(payload("2029-09-01", "2029-09-02"), null, "https://fixture.netlify.app");
+      await sql.query("UPDATE reservations SET expires_at = now() - interval '1 minute' WHERE id = $1", [original.id]);
+      const before = executedSql.length;
+      const calendar = await manual.adminCalendar("domo-amplio", "2029-09-01", "2029-10-01", false);
+      const statements = executedSql.slice(before);
+      assert.equal(statements.length, 2);
+      assert(statements.every((statement) => /^SELECT\s/.test(statement)));
+      assert.equal(calendar.reservations.find((row) => row.id === original.id)!.status, "expired");
+      assert.equal((await db.getBooking(original.id))!.status, "pending", "Viewing must not write back expired states.");
+      const replacement = await service.startReservation(payload("2029-09-01", "2029-09-02"), null, "https://fixture.netlify.app");
+      assert.equal((await db.getBooking(original.id))!.status, "expired");
+      const nights = await sql.query<{ reservation_id: string }>("SELECT reservation_id FROM reservation_nights WHERE night='2029-09-01' AND dome='domo-amplio'");
+      assert.deepEqual(nights.rows.map((row) => row.reservation_id), [replacement.id]);
+    });
+    await t.test("scheduled retries retain safety, skip recorded payment incidents and independently close expired links", async () => {
+      // This is the disposable fixture database. Isolate the worker from all
+      // earlier test reservations; no real database is accessed by this suite.
+      await sql.exec("TRUNCATE reservations CASCADE");
+      const worker = await import("../src/app/api/internal/reconcile/route");
+      const savedEnabled = process.env.BOOKING_RECONCILE_ENABLED;
+      const savedSecret = process.env.BOOKING_RECONCILE_SECRET;
+      const originalLog = console.error;
+      const secret = "fixture-reconciliation-secret-".repeat(2);
+      const request = (provided = secret) => new Request("http://localhost/api/internal/reconcile", {
+        method: "POST", headers: { "x-reconcile-secret": provided },
+      });
+      const run = async () => {
+        const response = await worker.POST(request());
+        assert.equal(response.status, 200);
+        return response.json() as Promise<{ checked: number; emailRetries: number; failures: number }>;
+      };
+      console.error = () => {};
+      try {
+        process.env.BOOKING_RECONCILE_SECRET = secret;
+        process.env.BOOKING_RECONCILE_ENABLED = "false";
+        const before = executedSql.length;
+        assert.equal((await worker.POST(request())).status, 204);
+        process.env.BOOKING_RECONCILE_ENABLED = "true";
+        assert.equal((await worker.POST(request("wrong"))).status, 404);
+        assert.equal(executedSql.length, before);
+        assert.deepEqual(await run(), { checked: 0, emailRetries: 0, failures: 0 });
+
+        const paid = await service.startReservation(payload("2029-10-01", "2029-10-02"), null, "https://fixture.netlify.app");
+        const paidRow = (await db.getBooking(paid.id))!;
+        links.get(paidRow.payment_link_id!)!.approved = true;
+        const beforeEmails = emailCalls;
+        smtpFailedAudience = "owner";
+        await run();
+        assert.equal((await db.getBooking(paid.id))!.status, "confirmed");
+        assert((await db.getBooking(paid.id))!.confirmation_email_sent_at);
+        assert.equal((await db.getBooking(paid.id))!.owner_notification_sent_at, null);
+        smtpFailedAudience = null;
+        const beforeRetry = emailCalls;
+        const retry = await run();
+        assert.equal(retry.emailRetries, 1);
+        assert.equal(emailCalls, beforeRetry + 1);
+        assert(emailCalls > beforeEmails);
+        assert((await db.getBooking(paid.id))!.owner_notification_sent_at);
+
+        const incident = await service.startReservation(payload("2029-10-03", "2029-10-04"), null, "https://fixture.netlify.app");
+        await db.expireBooking(incident.id);
+        const incidentRow = (await db.getBooking(incident.id))!;
+        links.get(incidentRow.payment_link_id!)!.approved = true;
+        await assert.rejects(service.reconcilePayment(incident.id), { status: 409 });
+        const beforeDetails = detailCalls;
+        const beforeClose = closedLinks;
+        closeLinkFailure = true;
+        assert.equal((await run()).failures, 1);
+        assert.equal(detailCalls, beforeDetails);
+        assert.equal((await db.getBooking(incident.id))!.payment_link_closed_at, null);
+        closeLinkFailure = false;
+        assert.equal((await run()).failures, 0);
+        assert.equal(detailCalls, beforeDetails);
+        assert.equal(closedLinks, beforeClose + 2);
+        assert((await db.getBooking(incident.id))!.payment_link_closed_at);
+        assert((await db.getBooking(incident.id))!.payment_issue, "The owner must still see the incident.");
+        assert.equal((await run()).checked, 0);
+
+        const late = await service.startReservation(payload("2029-10-05", "2029-10-06"), null, "https://fixture.netlify.app");
+        await db.expireBooking(late.id);
+        links.get((await db.getBooking(late.id))!.payment_link_id!)!.approved = true;
+        await run();
+        const lateRow = (await db.getBooking(late.id))!;
+        assert.equal(lateRow.status, "expired");
+        assert(lateRow.payment_issue); assert(lateRow.payment_link_closed_at);
+
+        const old = await service.startReservation(payload("2029-10-07", "2029-10-08"), null, "https://fixture.netlify.app");
+        await db.expireBooking(old.id);
+        await sql.query("UPDATE reservations SET created_at = now() - interval '8 days' WHERE id = $1", [old.id]);
+        const beforeOldDetails = detailCalls;
+        await run();
+        assert.equal(detailCalls, beforeOldDetails);
+        assert((await db.getBooking(old.id))!.payment_link_closed_at);
+        assert.equal((await run()).checked, 0);
+
+        const cancelled = await service.startReservation(payload("2030-05-01", "2030-05-02"), null, "https://fixture.netlify.app");
+        const { cancelLocalReservation } = await import("../src/lib/admin-cancellation");
+        closeLinkFailure = true;
+        await cancelLocalReservation(cancelled.id, { dome: "domo-amplio", reason: "Cambio de fechas solicitado", acknowledged: true, acknowledgeNoRefund: true }, "owner");
+        const cancelledRow = (await db.getBooking(cancelled.id))!;
+        assert.equal(cancelledRow.status, "cancelled"); assert.equal(cancelledRow.payment_link_closed_at, null);
+        links.get(cancelledRow.payment_link_id!)!.approved = true;
+        closeLinkFailure = false;
+        await run();
+        const lateCancelled = (await db.getBooking(cancelled.id))!;
+        assert.equal(lateCancelled.status, "cancelled");
+        assert(lateCancelled.payment_issue?.includes("reserva anulada")); assert(lateCancelled.payment_link_closed_at);
+        assert.equal((await sql.query("SELECT night FROM reservation_nights WHERE reservation_id=$1", [cancelled.id])).rows.length, 0);
+
+        const confirmedCancellation = await service.startReservation(payload("2030-05-03", "2030-05-04"), null, "https://fixture.netlify.app");
+        links.get((await db.getBooking(confirmedCancellation.id))!.payment_link_id!)!.approved = true;
+        await service.reconcilePayment(confirmedCancellation.id);
+        closeLinkFailure = true;
+        await cancelLocalReservation(confirmedCancellation.id, { dome: "domo-amplio", reason: "Cancelación acordada con el huésped", acknowledged: true, acknowledgeNoRefund: true }, "owner");
+        closeLinkFailure = false;
+        const beforeKnownChecks = detailCalls;
+        await run();
+        const knownCancelled = (await db.getBooking(confirmedCancellation.id))!;
+        assert.equal(knownCancelled.status, "cancelled"); assert.equal(knownCancelled.payment_issue, null);
+        assert(knownCancelled.payment_link_closed_at); assert.equal(detailCalls, beforeKnownChecks);
+        assert.equal((await run()).checked, 0);
+        assert(readFileSync("netlify/functions/reconcile-reservations.mts", "utf8").includes('schedule: "*/15 * * * *"'));
+      } finally {
+        console.error = originalLog; smtpFailedAudience = null; closeLinkFailure = false;
+        for (const [key, value] of [["BOOKING_RECONCILE_ENABLED", savedEnabled], ["BOOKING_RECONCILE_SECRET", savedSecret]]) {
+          if (value === undefined) delete process.env[key!]; else process.env[key!] = value;
+        }
+      }
     });
     await t.test("login rate limit is persisted in PostgreSQL", async () => {
       await sql.exec("TRUNCATE admin_login_limits");

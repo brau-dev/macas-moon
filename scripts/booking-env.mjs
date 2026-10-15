@@ -96,3 +96,26 @@ export function validateBookingEnv(values, { production = false } = {}) {
   if (!configured(get("NETLIFY_DB_URL")) && !configured(get("DATABASE_URL"))) warnings.push("La conexión no está en este archivo: Netlify debe proporcionar NETLIFY_DB_URL y aplicar las migraciones. No se ha comprobado la base.");
   return { errors, warnings, active, feedKeys, mode: freeTest ? "sin cobro" : `pagos ${get("TILOPAY_EXPECTED_ENVIRONMENT") ?? "sin entorno"}` };
 }
+
+// Compare only public configuration. Never include private environment values or
+// arbitrary response text in diagnostics from the published site.
+export function comparePublishedPricing(values, published) {
+  if (!published || typeof published !== "object" || Array.isArray(published) ||
+      !published.perNight || typeof published.perNight !== "object" || Array.isArray(published.perNight)) {
+    return ["El sitio no devuelve tarifas válidas."];
+  }
+  const errors = [];
+  if (published.currency !== values.get("BOOKING_CURRENCY")) errors.push("BOOKING_CURRENCY no coincide con la configuración local.");
+  const active = (values.get("BOOKING_ACTIVE_DOMES") ?? "").split(",").map((value) => value.trim());
+  for (const dome of domes) {
+    if (!active.includes(dome)) {
+      if (Object.hasOwn(published.perNight, dome)) errors.push(`${dome}: sigue habilitado en el sitio aunque está desactivado localmente.`);
+      continue;
+    }
+    const key = dome === "domo-amplio" ? "PRICE_DOMO_AMPLIO_CENTS" : "PRICE_DOMO_ROMANTICO_CENTS";
+    if (!Object.hasOwn(published.perNight, dome)) errors.push(`${dome}: no está habilitado en el sitio publicado. Revisa BOOKING_ACTIVE_DOMES en Netlify.`);
+    else if (published.perNight[dome] !== Number(values.get(key))) errors.push(`${key}: el precio publicado no coincide con el archivo local.`);
+  }
+  if (Object.keys(published.perNight).some((key) => !domes.includes(key))) errors.push("El sitio devuelve un alojamiento no reconocido.");
+  return errors;
+}

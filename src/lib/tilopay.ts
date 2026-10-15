@@ -220,8 +220,8 @@ export async function paymentApproved(booking: Booking) {
   return false;
 }
 
-export async function closeExpiredPaymentLink(booking: Booking) {
-  if (!booking.payment_link_id || booking.payment_link_closed_at || booking.status !== "expired") return;
+export async function closeInactivePaymentLink(booking: Booking) {
+  if (!booking.payment_link_id || booking.payment_link_closed_at || !["expired", "cancelled"].includes(booking.status)) return;
   const { key } = credentials();
   const result = await api<{ type?: string }>("deleteLinkPayment", { key, id: booking.payment_link_id }, await token());
   if (result.type !== "200") throw new Error("Tilopay could not close the expired payment link");

@@ -24,7 +24,7 @@ const login = await request("/admin/login", 200);
 assert.match(login.headers.get("cache-control") ?? "", /no-store/);
 assert.equal(login.headers.get("referrer-policy"), "no-referrer");
 assert.match(login.headers.get("x-robots-tag") ?? "", /noindex/);
-for (const path of ["/api/admin/calendar", "/api/reservations/not-a-uuid", "/.env.netlify", "/.env.local", "/db/001_reservations.sql", "/docs/deploy-reservas-con-pago.md"]) {
+for (const path of ["/api/admin/calendar", "/api/reservations/not-a-uuid", "/.env.netlify", "/.env.local", "/db/001_reservations.sql", "/db/004_admin_cancellations.sql", "/docs/deploy-reservas-con-pago.md"]) {
   await request(path, path.includes("admin/calendar") ? 401 : path.includes("not-a-uuid") ? 400 : 404);
 }
 const pricing = await request("/api/pricing", 200);

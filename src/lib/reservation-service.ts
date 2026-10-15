@@ -125,6 +125,9 @@ export async function reconcilePayment(id: string) {
   if (!booking) throw new BookingError("Reserva desconocida.", 404);
   if (booking.status === "confirmed") return booking;
   if (booking.payment_provider !== "tilopay") return booking;
+  // An administrator deliberately cancelled an already confirmed payment.
+  // Never reactivate it or misreport that known charge as a new late payment.
+  if (booking.status === "cancelled" && booking.cancelled_from_status === "confirmed") return booking;
   // Timestamp failed checks too, so one failing row cannot starve reconciliation.
   await recordPaymentCheck(id);
   const approved = await paymentApproved(booking);
@@ -136,13 +139,22 @@ export async function reconcilePayment(id: string) {
     return booking;
   }
   if (booking.status !== "pending") {
-    await recordPaymentCheck(id, "Pago aprobado sin bloqueo vigente. Revisar disponibilidad y gestionar reembolso; no confirmar automáticamente.");
-    throw new BookingError("Pago aprobado tras vencer el bloqueo; requiere reembolso o gestión inmediata.", 409);
+    const cancelled = booking.status === "cancelled";
+    await recordPaymentCheck(id, cancelled
+      ? "Pago aprobado de una reserva anulada. Revisar el pago y gestionar el reembolso si corresponde; no confirmar automáticamente."
+      : "Pago aprobado sin bloqueo vigente. Revisar disponibilidad y gestionar reembolso; no confirmar automáticamente.");
+    throw new BookingError(cancelled ? "Pago aprobado de una reserva anulada; requiere gestión inmediata."
+      : "Pago aprobado tras vencer el bloqueo; requiere reembolso o gestión inmediata.", 409);
   }
   const confirmed = await confirmBooking(id);
   if (!confirmed) {
     const current = await getBooking(id);
     if (current?.status === "confirmed") return current;
+    if (current?.status === "cancelled") {
+      if (current.cancelled_from_status === "confirmed") return current;
+      await recordPaymentCheck(id, "Pago aprobado durante la anulación de la reserva. Revisar el pago y gestionar el reembolso si corresponde; no confirmar automáticamente.");
+      throw new BookingError("Pago aprobado de una reserva anulada; requiere gestión inmediata.", 409);
+    }
     await expireBooking(id);
     await recordPaymentCheck(id, "Pago aprobado después del vencimiento. Requiere gestión inmediata y posible reembolso.");
     throw new BookingError("Pago aprobado tras vencer el bloqueo; requiere reembolso o gestión inmediata.", 409);

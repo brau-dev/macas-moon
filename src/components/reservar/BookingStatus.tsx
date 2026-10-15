@@ -89,6 +89,7 @@ export function BookingStatus() {
         Pago aún no verificado. No consideres esta reserva confirmada hasta que cambie el estado.
       </p> : status.status === "cancelled" ? <p className="rounded-2xl bg-sand-50 p-4">
         Reserva cancelada; las noches se liberaron en esta web y desaparecerán del iCal de salida.
+        Anular la reserva no realiza un reembolso automático; consulta con el alojamiento si hubo un pago.
         Expedia puede conservar el bloqueo; el administrador deberá comprobarlo y reabrir las noches manualmente si corresponde.
       </p> : <p className="rounded-2xl bg-sand-50 p-4">
         El bloqueo de esta reserva expiró. Si se realizó un cargo, contacta al alojamiento con tu número de reserva.
