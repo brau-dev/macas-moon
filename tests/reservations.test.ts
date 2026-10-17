@@ -26,6 +26,39 @@ test("fonts are bundled with their licenses and never require the Google font lo
   }
 });
 
+test("admin calendar prices have their own color, exact amount, currency and nightly unit", async () => {
+  const { createElement } = await import("react");
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  const { AdminNightPrice } = await import("../src/components/admin/AdminNightPrice");
+  for (const [day, amountCents, special, currency, expected] of [
+    ["2034-01-01", 17000, false, "USD", "$170"],
+    ["2034-01-02", 20025, true, "USD", "$200,25"],
+    ["2034-01-03", 1, true, "USD", "$0,01"],
+    ["2034-01-04", 19999, false, "EUR", "199,99"],
+  ] as const) {
+    const html = renderToStaticMarkup(createElement(AdminNightPrice, { day, currency, night: { date: day, amountCents, special } }));
+    assert(html.includes(expected));
+    assert(html.includes(`>${currency}</span>`)); assert(html.includes(">/noche</span>"));
+    assert(html.includes("text-teal-950")); assert(html.includes(special ? "bg-teal-100" : "bg-teal-50"));
+    assert(html.includes(`Precio de la noche del ${day}`));
+    assert(html.includes(special ? "Tarifa especial." : "Tarifa base."));
+  }
+});
+
+test("admin calendar never invents a price when a night or its currency is unavailable", async () => {
+  const { createElement } = await import("react");
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  const { AdminNightPrice } = await import("../src/components/admin/AdminNightPrice");
+  const day = "2034-01-01";
+  for (const change of [{ night: undefined }, { currency: null }, { currency: "invalid" },
+    { night: { date: "2034-01-02", amountCents: 17000, special: false } },
+    { night: { date: day, amountCents: 0, special: false } }]) {
+    const html = renderToStaticMarkup(createElement(AdminNightPrice, { day, currency: "USD",
+      night: { date: day, amountCents: 17000, special: false }, ...change }));
+    assert(html.includes("Sin tarifa")); assert(!html.includes("$170")); assert(!html.includes("/noche"));
+  }
+});
+
 function adminReservationFixture(change: Partial<AdminReservation> = {}): AdminReservation {
   return { id: "00000000-0000-4000-8000-000000000099", dome: "domo-amplio",
     checkIn: "2031-06-01", checkOut: "2031-06-03", kind: "booking", status: "confirmed",
@@ -38,6 +71,92 @@ function adminReservationFixture(change: Partial<AdminReservation> = {}): AdminR
     paymentLinkState: null, paymentLinkCheckedAt: null, paymentLinkDiagnostic: null,
     ...change };
 }
+
+test("Netlify import policy separates public settings from credentials and prepares paid mode without leaking values", async () => {
+  const { classifyNetlifyEnv, formatPaidNetlifyEnv } = await import("../scripts/netlify-env-policy.mjs");
+  const { parseBookingEnv, validateBookingEnv } = await import("../scripts/booking-env.mjs");
+  const values = new Map<string, string>([
+    ["NEXT_PUBLIC_BOOKING_TEST_MODE", "false"], ["TILOPAY_CHECKOUT_ENABLED", "true"],
+    ["TILOPAY_EXPECTED_ENVIRONMENT", "Test"], ["BOOKING_ACTIVE_DOMES", "domo-romantico,domo-amplio"],
+    ["SMTP_USER", "owner@gmail.com"], ["SMTP_PASSWORD", "abcd efgh ijkl mnop"],
+    ["TILOPAY_API_USER", "api-fixture"], ["TILOPAY_API_PASSWORD", "fixture-pass"],
+    ["ADMIN_USERNAME", "owner"], ["ADMIN_PASSWORD_HASH", "fixture-hash"],
+    ["BOOKING_REPLY_TO", ""], ["TILOPAY_MERCHANT_ID", ""],
+    ["NEXT_PUBLIC_TURNSTILE_SITE_KEY", "public-fixture"], ["TURNSTILE_SECRET_KEY", "private-fixture"],
+    ["ICAL_DOMO_ROMANTICO_AIRBNB_URL", "https://airbnb.example/private.ics?t=fixture"],
+    ["BOOKING_TEST_SECRET", "old-free-fixture-value"],
+  ]);
+  const groups = classifyNetlifyEnv(values);
+  assert(groups.nonSecret.includes("SMTP_USER")); assert(groups.nonSecret.includes("ADMIN_USERNAME"));
+  assert(groups.nonSecret.includes("NEXT_PUBLIC_TURNSTILE_SITE_KEY"));
+  assert(groups.secret.includes("SMTP_PASSWORD")); assert(groups.secret.includes("TILOPAY_API_USER"));
+  assert(groups.secret.includes("TURNSTILE_SECRET_KEY")); assert(groups.secret.includes("ADMIN_PASSWORD_HASH"));
+  assert(groups.secret.includes("ICAL_DOMO_ROMANTICO_AIRBNB_URL"));
+  assert(!JSON.stringify(groups).includes("fixture-pass"));
+  assert.equal(groups.unknown.length, 0);
+  const formatted = formatPaidNetlifyEnv(values);
+  const parsed = parseBookingEnv(formatted);
+  assert.deepEqual(parsed.errors, []);
+  assert.equal(parsed.values.get("SMTP_PASSWORD"), "abcdefghijklmnop");
+  assert.equal(parsed.values.get("TILOPAY_EXPECTED_ENVIRONMENT"), "Test");
+  assert.equal(parsed.values.get("NEXT_PUBLIC_BOOKING_TEST_MODE"), "false");
+  assert.equal(parsed.values.get("TILOPAY_API_PASSWORD"), values.get("TILOPAY_API_PASSWORD"));
+  assert(!parsed.values.has("BOOKING_TEST_SECRET")); assert(!formatted.includes("old-free-fixture-value"));
+  assert(formatted.indexOf("SMTP_USER=") < formatted.indexOf("# 2. MARCAR COMO SECRETOS"));
+  assert(formatted.indexOf("SMTP_PASSWORD=") > formatted.indexOf("# 2. MARCAR COMO SECRETOS"));
+  assert.equal(formatPaidNetlifyEnv(parsed.values), formatted);
+  const typo = new Map([...values, ["BOOKING_RECONCIL_ENABLED", "true"]]);
+  assert(validateBookingEnv(typo).errors.some((error: string) => error.includes("BOOKING_RECONCIL_ENABLED")));
+  assert.throws(() => formatPaidNetlifyEnv(typo));
+  const managed = new Map([...values, ["NETLIFY_DB_URL", "postgresql://fixture.invalid/private"]]);
+  assert.deepEqual(classifyNetlifyEnv(managed).managed, ["NETLIFY_DB_URL"]);
+  assert.throws(() => formatPaidNetlifyEnv(managed));
+});
+
+test("secret audit covers short API credentials and their encoded variants without treating booleans as secrets", async () => {
+  const { configuredSecretEncodings, minimumSecretLength } = await import("../scripts/secret-encodings.mjs");
+  assert.equal(minimumSecretLength, 5);
+  const value = "ab#cde";
+  assert.deepEqual(configuredSecretEncodings(value), [value, "ab%23cde", Buffer.from(value).toString("base64")]);
+  assert.deepEqual(configuredSecretEncodings("true"), []);
+  assert.deepEqual(configuredSecretEncodings(""), []);
+  assert.equal(configuredSecretEncodings("abcde")[0], "abcde");
+});
+
+test("separate Netlify imports preserve every value and never mix secrets with settings", async () => {
+  const { splitNetlifyEnv, classifyNetlifyEnv } = await import("../scripts/netlify-env-policy.mjs");
+  const { parseBookingEnv } = await import("../scripts/booking-env.mjs");
+  const source = new Map<string, string>([
+    ["BOOKING_ENABLED", "true"], ["BOOKING_ACTIVE_DOMES", "domo-romantico,domo-amplio"],
+    ["TILOPAY_EXPECTED_ENVIRONMENT", "Test"], ["SMTP_USER", "owner@gmail.com"],
+    ["SMTP_PASSWORD", "abcd efgh ijkl mnop"], ["TILOPAY_API_USER", "fixture-user"],
+    ["TILOPAY_API_PASSWORD", "fixture#password"], ["BOOKING_REPLY_TO", ""],
+    ["ICAL_DOMO_AMPLIO_AIRBNB_URL", "https://airbnb.example/private.ics?t=fixture"],
+  ]);
+  const split = splitNetlifyEnv(source);
+  const plain = parseBookingEnv(split.nonSecret); const secret = parseBookingEnv(split.secret);
+  assert.deepEqual(plain.errors, []); assert.deepEqual(secret.errors, []);
+  assert.equal(classifyNetlifyEnv(plain.values).secret.length, 0);
+  assert.equal(classifyNetlifyEnv(secret.values).nonSecret.length, 0);
+  assert.deepEqual([...new Map([...plain.values, ...secret.values])].sort(), [...source].sort());
+  assert(!split.nonSecret.includes("fixture-user")); assert(!split.nonSecret.includes("fixture#password"));
+  assert(!split.nonSecret.includes("private.ics"));
+  assert(![...plain.values.keys()].some((key) => secret.values.has(key)));
+  assert.throws(() => splitNetlifyEnv(new Map([...source, ["UNKNOWN_VARIABLE", "fixture"]])));
+  assert.throws(() => splitNetlifyEnv(new Map([...source, ["NETLIFY_DB_URL", "postgresql://fixture.invalid/private"]])));
+});
+
+test("published nightly-price checks accept overrides, reject stale configuration and never require a booking", async () => {
+  const { validPublishedNightPrice } = await import("../scripts/booking-env.mjs");
+  const values = new Map([["BOOKING_CURRENCY", "USD"], ["PRICE_DOMO_AMPLIO_CENTS", "17000"], ["PRICE_DOMO_ROMANTICO_CENTS", "17000"]]);
+  const quote = { dome: "domo-amplio", start: "2034-01-01", end: "2034-01-02", currency: "USD", basePriceCents: 17000,
+    nights: [{ date: "2034-01-01", amountCents: 21025, special: true }], amountCents: 21025 };
+  assert(validPublishedNightPrice(values, quote.dome, quote.start, quote.end, quote));
+  for (const change of [{ dome: "domo-romantico" }, { amountCents: 17000 }, { currency: "EUR" },
+    { basePriceCents: 1 }, { nights: [] }, { start: "2034-01-02" }, { amountCents: 0 }]) {
+    assert(!validPublishedNightPrice(values, quote.dome, quote.start, quote.end, { ...quote, ...change }));
+  }
+});
 
 // SQL runs against disposable in-memory PostgreSQL. All HTTP calls are fixtures.
 // No .env files are loaded, no real calendars are read, and no payments are sent.
@@ -980,6 +1099,8 @@ test("reservations, payments, iCal and private administration", async (t) => {
       assert(html.includes("Ver calendario de")); assert(html.includes("Romántico")); assert(html.includes("Amplio"));
       assert(html.includes("Mostrar historial"));
       assert(html.includes("Editar precios"));
+      assert(html.includes("USD/noche"));
+      assert(html.includes("Turquesa: precio configurado por noche"));
       assert(!/\b(?:pruebas?|simulad[oa]s?|test)\b/i.test(html));
       assert(html.includes("https://fixture.netlify.app/api/calendar/domo-amplio/calendar.ics"));
       for (const environment of ["Test", "Production"]) {

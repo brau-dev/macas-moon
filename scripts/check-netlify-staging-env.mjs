@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseBookingEnv, validateBookingEnv } from "./booking-env.mjs";
+import { classifyNetlifyEnv } from "./netlify-env-policy.mjs";
 
 const args = process.argv.slice(2);
 const file = resolve(args.find((arg) => !arg.startsWith("--")) ?? ".env.netlify");
@@ -31,3 +32,11 @@ if (errors.length) {
   console.log("Esto no valida credenciales, modo del comercio, remitente, DNS, migraciones ni cobros reales.");
 }
 console.log("No se mostraron claves ni enlaces privados.");
+if (args.includes("--classify")) {
+  const groups = classifyNetlifyEnv(parsed.values);
+  console.log("\nSIN marcar como secretos:\n" + groups.nonSecret.join("\n"));
+  console.log("\nMARCAR como secretos:\n" + groups.secret.join("\n"));
+  if (groups.managed.length) console.log("\nAdministradas por Netlify; no reemplazar:\n" + groups.managed.join("\n"));
+  if (groups.unknown.length) console.log("\nVariables no reconocidas:\n" + groups.unknown.join("\n"));
+  console.log("Los archivos .env no configuran las casillas de secretos: revísalas en Netlify.");
+}

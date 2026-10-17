@@ -1,4 +1,5 @@
 import { missingEmailConfig } from "../src/lib/gmail-config.mjs";
+import { classifyNetlifyEnv } from "./netlify-env-policy.mjs";
 
 const domes = ["domo-romantico", "domo-amplio"];
 const configured = (value) => typeof value === "string" && Boolean(value.trim());
@@ -23,6 +24,7 @@ export function validateBookingEnv(values, { production = false } = {}) {
   const errors = [];
   const warnings = [];
   const get = (key) => values.get(key);
+  for (const key of classifyNetlifyEnv(values).unknown) errors.push(`${key} no es una variable reconocida de este proyecto; revisa el nombre antes de importar.`);
   const requireValue = (key) => { if (!configured(get(key))) errors.push(`Falta completar ${key}.`); };
   const requireFlag = (key, expected) => { if (get(key) !== expected) errors.push(`${key} debe ser ${expected}.`); };
   const publicKeys = new Set(["NEXT_PUBLIC_BOOKING_TEST_MODE", "NEXT_PUBLIC_TURNSTILE_SITE_KEY",
@@ -99,6 +101,7 @@ export function validateBookingEnv(values, { production = false } = {}) {
     errors.push("BOOKING_RECONCILE_SECRET debe ser una clave nueva de al menos 32 caracteres; genera con openssl rand -hex 32.");
   }
   if (production && configured(get("BOOKING_TEST_SECRET"))) errors.push("Elimina BOOKING_TEST_SECRET del archivo de producción.");
+  if (!freeTest && !production && configured(get("BOOKING_TEST_SECRET"))) warnings.push("BOOKING_TEST_SECRET no se usa con pago obligatorio: retírala del archivo y de Netlify para dejar listo el futuro cambio a Producción.");
   if (!configured(get("NETLIFY_DB_URL")) && !configured(get("DATABASE_URL"))) warnings.push("La conexión no está en este archivo: Netlify debe proporcionar NETLIFY_DB_URL y aplicar las migraciones. No se ha comprobado la base.");
   return { errors, warnings, active, feedKeys, mode: freeTest ? "sin cobro" : `pagos ${get("TILOPAY_EXPECTED_ENVIRONMENT") ?? "sin entorno"}` };
 }
@@ -124,4 +127,16 @@ export function comparePublishedPricing(values, published) {
   }
   if (Object.keys(published.perNight).some((key) => !domes.includes(key))) errors.push("El sitio devuelve un alojamiento no reconocido.");
   return errors;
+}
+
+// Verify the real pricing endpoint, including storage/migration 0007, using
+// one public night's rate. No bookings, private IDs, payments or guest data.
+export function validPublishedNightPrice(values, dome, start, end, quote) {
+  const baseKey = dome === "domo-amplio" ? "PRICE_DOMO_AMPLIO_CENTS" : "PRICE_DOMO_ROMANTICO_CENTS";
+  return Boolean(quote && typeof quote === "object" && !Array.isArray(quote) &&
+    quote.dome === dome && quote.start === start && quote.end === end &&
+    quote.currency === values.get("BOOKING_CURRENCY") && quote.basePriceCents === Number(values.get(baseKey)) &&
+    Array.isArray(quote.nights) && quote.nights.length === 1 && quote.nights[0]?.date === start &&
+    typeof quote.nights[0]?.special === "boolean" && Number.isSafeInteger(quote.amountCents) && quote.amountCents > 0 &&
+    quote.nights[0]?.amountCents === quote.amountCents);
 }

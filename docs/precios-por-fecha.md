@@ -4,6 +4,12 @@
 
 1. Entra a `/admin` con tu usuario y contraseña.
 2. Escoge **Domo Amplio** o **Domo Romántico**.
+   Cada fecha muestra su precio en una **etiqueta turquesa**, con la moneda y la
+   unidad **USD/noche**. Se ve tanto en «Reservas y bloqueos» como en «Editar precios».
+   En pantallas estrechas puedes desplazar horizontalmente el calendario para
+   leer los importes completos. «Sin tarifa» indica que no hay un precio verificable,
+   no que la noche sea gratuita. Es la tarifa configurada para nuevas reservas;
+   los importes de reservas anteriores no cambian.
 3. Pulsa **Editar precios**, encima del calendario.
 4. Pulsa la primera noche y después la última. Se seleccionan también todas las
    noches intermedias. Puedes pasar de mes entre ambos clics. Para una sola noche,

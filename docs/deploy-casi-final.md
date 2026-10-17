@@ -10,20 +10,31 @@
 - `TILOPAY_CHECKOUT_ENABLED=true`, `NEXT_PUBLIC_BOOKING_TEST_MODE=false` y `BOOKING_RECONCILE_ENABLED=true`.
 - Sin nuevas cuentas, contraseñas ni variables obligatorias.
 
+El sitio está pausado por decisión del propietario. No hace falta reactivarlo para
+las comprobaciones locales. Se reactiva al publicar y realizar las pruebas finales;
+una respuesta 404 mientras siga pausado no demuestra un fallo del código.
+
 ## Antes de publicar: una sola preparación
 
 1. Ejecuta `npm run check:deploy`. Verifica configuración, pruebas con proveedores
    simulados, lint, compilación, tipos y exposición de secretos. No publica ni cobra.
 2. En Netlify abre **macasmoon-reservas-testing → Project configuration → Environment variables**
-   e importa **todo el `.env.netlify` actual**. No lo añadas a Git ni lo pegues en el chat.
+   e importa **los dos archivos generados**, primero `.env.netlify.sin-secretos` sin
+   marcar secretos y después `.env.netlify.secretos` marcándolos todos como secretos.
+   `.env.netlify` queda como maestro local; no lo importes entero con una sola casilla.
+   No añadas estos archivos a Git ni los pegues en el chat.
    Actualiza conflictos: ambos domos en `BOOKING_ACTIVE_DOMES`, ambas tarifas `17000`
    y los cuatro iCal privados. El push no importa este archivo.
 3. Puedes usar **Same value for all deploy contexts** en este proyecto separado de
    pruebas. El contexto **Production de Netlify** corresponde a su URL principal;
    no significa cambiar Tilopay a Producción.
-4. Los secretos necesitan alcance **Functions**; las claves `NEXT_PUBLIC_*` también
-   **Builds**. No marques `SMTP_USER` ni la clave pública Turnstile como secretos.
-   No sobrescribas `URL`, `SITE_ID` o `NETLIFY_DB_URL`, que suministra Netlify.
+4. Sigue la [lista exacta de variables y casillas](variables-netlify.md). Cada archivo
+   contiene un solo grupo; los comentarios no configuran esas casillas automáticamente.
+   La configuración necesita Builds +
+   Functions y las credenciales solo Functions. Si `SMTP_USER` ya estaba marcado como
+   secreto, elimínalo y créalo de nuevo sin esa casilla: Netlify no permite desmarcarlo.
+   No sobrescribas `URL`, `SITE_ID` o `NETLIFY_DB_URL`. Elimina de Netlify la antigua
+   `BOOKING_TEST_SECRET`: ya no está en el archivo y la importación no borra variables ausentes.
 5. Revisa tus cambios, haz tú el commit y el push cuando estés conforme. Publica
    esta rama solo en el proyecto de pruebas. El agente no hace commits ni deploys.
 6. Comprueba que Netlify aplique las migraciones pendientes **0001 a 0007** antes
@@ -32,7 +43,8 @@
    Con Netlify Database nativo están en `netlify/database/migrations`; si gestionas
    SQL manualmente, aplica los archivos pendientes de `db/` en orden antes de publicar.
    [Migraciones nativas de Netlify](https://docs.netlify.com/build/data-and-storage/netlify-database/migrations/).
-7. Ejecuta `npm run check:published`: debe confirmar ambos domos, precios e iCal.
+7. Con el proyecto reactivado, ejecuta `npm run check:published`: debe confirmar ambos
+   domos, los precios por fecha (con la 0007 aplicada) y ambos iCal.
    No crea reservas. Si falla, no hagas otra compra para intentar arreglarlo.
 
 ## Pruebas de aceptación en este mismo deploy
@@ -80,8 +92,9 @@ hay aprobación final para ventas reales: se diagnostica antes de cambiar de mod
    tarifas. Usar las credenciales que correspondan al comercio habilitado; no se asume
    que una variable de la web cambie el modo del proveedor.
    [Entornos de Tilopay](https://tilopay.com/developers/entornos).
-4. Ejecutar `npm run check:netlify-env -- --production` contra un archivo local privado
-   con esos valores, e importar la configuración definitiva. No cambies el archivo a
+4. Ejecutar `npm run check:netlify-env -- archivo-privado --production` contra un archivo
+   local privado con esos valores, o `npm run check:netlify-env -- --production` cuando
+   decidas cambiar `.env.netlify`, e importar la configuración definitiva. No cambies el archivo a
    Producción hasta decidirlo. Rotar previamente cualquier secreto que se haya compartido.
 5. Publicar la misma revisión de código con la configuración final. El historial
    Test seguirá identificado como «sin cargo real»; sus enlaces no se consultan ni

@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { join, relative } from "node:path";
 import { parseBookingEnv } from "./booking-env.mjs";
+import { configuredSecretEncodings, minimumSecretLength } from "./secret-encodings.mjs";
 
 // Read-only audit. Never prints secret values, matching text, provider URLs or tokens.
 const findings = [];
@@ -17,12 +18,12 @@ async function git(args) {
 for (const file of [".env.local", ".env.netlify"]) {
   if (!existsSync(file)) continue;
   for (const [key, value] of parseBookingEnv(readFileSync(file, "utf8")).values) {
-    if (privateKey.test(key) && value.length >= 12) values.set(key, value);
+    if (privateKey.test(key) && value.length >= minimumSecretLength) values.set(key, value);
   }
   if (process.platform !== "win32" && (statSync(file).mode & 0o077)) findings.push({ kind: "local-file-permissions", file });
 }
 for (const [key, value] of Object.entries(process.env)) {
-  if (privateKey.test(key) && value && value.length >= 12) values.set(key, value);
+  if (privateKey.test(key) && value && value.length >= minimumSecretLength) values.set(key, value);
 }
 if (values.has("SMTP_PASSWORD")) values.set("SMTP_PASSWORD (sin espacios)", values.get("SMTP_PASSWORD").replace(/\s/g, ""));
 
@@ -37,7 +38,7 @@ function walk(dir) {
 
 function scan(buffer, file, revision) {
   for (const [key, value] of values) {
-    if (buffer.includes(Buffer.from(value)) || buffer.includes(Buffer.from(encodeURIComponent(value)))) {
+    if (configuredSecretEncodings(value).some((encoded) => buffer.includes(Buffer.from(encoded)))) {
       findings.push({ kind: "configured-private-value", key, file, ...(revision ? { revision } : {}) });
     }
   }

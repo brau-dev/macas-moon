@@ -18,7 +18,7 @@ if (!process.env.npm_execpath) {
   console.error("Ejecuta este comando con npm run check:deploy.");
   process.exit(1);
 }
-for (const task of ["test", "lint", "build", "typecheck", "audit:exposure"]) {
+for (const task of ["env:split", "test", "lint", "build", "typecheck", "audit:exposure"]) {
   console.log(`\nComprobación local: ${task}`);
   const env = task === "build" ? { ...process.env, ...Object.fromEntries(parsed.values) } : process.env;
   const child = spawnSync(process.execPath, [process.env.npm_execpath, "run", task], { env, stdio: "inherit" });
@@ -27,5 +27,6 @@ for (const task of ["test", "lint", "build", "typecheck", "audit:exposure"]) {
     process.exit(child.status || 1);
   }
 }
-console.log("\nComprobaciones locales correctas. Falta importar .env.netlify en Netlify y comprobar el deploy publicado.");
+console.log("\nComprobaciones locales correctas. Importa .env.netlify.sin-secretos y .env.netlify.secretos por separado y comprueba el deploy publicado.");
 console.log("No se verificaron credenciales externas ni se realizaron reservas, cobros o envíos de correo.");
+console.log("Clasificación de variables: npm run check:netlify-env -- --classify. Revisa Contains secret values en Netlify antes de publicar.");

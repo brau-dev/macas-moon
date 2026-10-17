@@ -9,6 +9,7 @@ import type { CalendarSource } from "@/lib/ical";
 import { AdminCancellationDialog } from "@/components/admin/AdminCancellationDialog";
 import { AdminDayDetailsPopover } from "@/components/admin/AdminDayDetailsPopover";
 import { AdminPaymentLinkStatus } from "@/components/admin/AdminPaymentLinkStatus";
+import { AdminNightPrice } from "@/components/admin/AdminNightPrice";
 import type { NightlyPricing } from "@/lib/nightly-pricing";
 import { adminReservationStatusLabels as statusLabels, isActiveAdminReservation,
   getAdminDayReservations, getAdminDaySources, type AdminReservation as Reservation } from "@/lib/admin-calendar-view";
@@ -65,8 +66,6 @@ export function AdminDashboard({ domes, checkout, siteOrigin }: { domes: Array<{
     calendar.imported.every((source) => source.status === "ready"));
   const priceMap = new Map(calendar?.pricing?.nights.map((night) => [night.date, night]));
   const money = (cents: number) => new Intl.NumberFormat("es-CR", { style: "currency", currency: calendar?.pricing?.currency ?? "USD" }).format(cents / 100);
-  const compactMoney = (cents: number) => new Intl.NumberFormat("es-CR", { style: "currency", currency: calendar?.pricing?.currency ?? "USD",
-    currencyDisplay: "narrowSymbol", minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(cents / 100);
   const selectedNights = priceStart && priceLast >= priceStart ? nightsBetween(priceStart, priceLast) + 1 : 0;
   const priceRangeReady = Boolean(calendar?.pricing && !loading && selectedNights > 0 && selectedNights <= 365 && priceStart >= todayInCostaRica());
 
@@ -193,7 +192,7 @@ export function AdminDashboard({ domes, checkout, siteOrigin }: { domes: Array<{
       </p>)}
     </div>
     <div className="mt-5 grid items-start gap-6 lg:grid-cols-[1.5fr_1fr]">
-      <section aria-label="Calendario administrativo" className="rounded-2xl border border-border bg-warm-white p-4 sm:p-6">
+      <section aria-label="Calendario administrativo" className="min-w-0 rounded-2xl border border-border bg-warm-white p-4 sm:p-6">
         <div className="mb-4 flex gap-2" aria-label="Modo del calendario">
           <button type="button" aria-pressed={!priceMode} className={cn(actionClass, !priceMode && "bg-olive-100")} disabled={busy}
             onClick={() => { setPriceMode(false); setDayDetails(null); }}>Reservas y bloqueos</button>
@@ -205,7 +204,8 @@ export function AdminDashboard({ domes, checkout, siteOrigin }: { domes: Array<{
           <h2 className="font-semibold capitalize">{new Date(`${start}T12:00:00Z`).toLocaleDateString("es-CR", { month: "long", year: "numeric", timeZone: "UTC" })}</h2>
           <button aria-label="Mes siguiente" disabled={busy} className={actionClass} onClick={() => { requestSequence.current++; setMonth(moveMonth(month, 1)); setCalendar(null); setLoading(true); setSelectedDay(""); setDayDetails(null); }}><ChevronRight size={18} /></button>
         </div>
-        <div className="grid grid-cols-7 gap-1">
+        <div className="overflow-x-auto pb-2">
+        <div className="grid min-w-[420px] grid-cols-7 gap-1 sm:min-w-0">
           {["lun", "mar", "mié", "jue", "vie", "sáb", "dom"].map((label) => <span key={label} className="py-2 text-center text-xs text-muted">{label}</span>)}
           {Array.from({ length: leading }, (_, index) => <span key={`empty-${index}`} />)}
           {Array.from({ length: days }, (_, index) => {
@@ -216,7 +216,7 @@ export function AdminDashboard({ domes, checkout, siteOrigin }: { domes: Array<{
             const verified = calendar?.imported.every((source) => source.status === "ready");
             const selected = checkIn && checkOut ? checkIn <= day && day < checkOut : checkIn === day;
             const labels = [...local.map((row) => row.kind === "manual" ? "Bloqueo manual" : row.status === "pending" ? "Pago pendiente" : "Reserva web"), ...sources.map((source) => source.name)];
-            return <button type="button" key={day} disabled={!calendar || busy} aria-label={`${day}: ${labels.join(", ") || (verified ? "Disponible" : "Sin verificar")}${priceMap.has(day) ? `, ${money(priceMap.get(day)!.amountCents)}` : ""}`}
+            return <button type="button" key={day} disabled={!calendar || busy} aria-label={`${day}: ${labels.join(", ") || (verified ? "Disponible" : "Sin verificar")}${priceMap.has(day) ? `, precio ${money(priceMap.get(day)!.amountCents)} por noche` : calendar ? ", precio no disponible" : ""}`}
               aria-pressed={priceMode ? Boolean(priceStart && day >= priceStart && day <= priceLast) : undefined}
               aria-haspopup={occupied && !priceMode ? "dialog" : undefined}
               aria-expanded={occupied && !priceMode ? dayDetails?.day === day && dayDetails.dome === dome : undefined}
@@ -242,12 +242,12 @@ export function AdminDashboard({ domes, checkout, siteOrigin }: { domes: Array<{
                   if (!checkIn || checkOut || day <= checkIn) { setCheckIn(day); setCheckOut(""); }
                   else setCheckOut(day);
                 }
-              }} className={cn("min-h-16 rounded-xl border border-transparent p-1 text-center text-sm sm:min-h-20",
+              }} className={cn("min-h-24 rounded-xl border border-transparent p-1 text-center align-top text-sm",
                 occupied ? "bg-sand-100" : verified ? "bg-olive-50" : "bg-sand-50 text-muted",
                 !priceMode && selected && "border-olive-600", !priceMode && selectedDay === day && "ring-2 ring-olive-600",
                 priceMode && day >= priceStart && day <= priceLast && "ring-2 ring-olive-600 bg-olive-100")}>
               <span className="font-medium">{index + 1}</span>
-              {priceMap.has(day) ? <span className={cn("mt-0.5 block text-[10px] sm:text-xs", priceMap.get(day)?.special && "font-semibold text-olive-900")}>{compactMoney(priceMap.get(day)!.amountCents)}</span> : null}
+              {calendar ? <AdminNightPrice day={day} night={priceMap.get(day)} currency={calendar.pricing?.currency ?? null} /> : null}
               <span className="mt-1 flex flex-wrap justify-center gap-1">
                 {local.some((row) => row.kind === "manual") ? <span title="Manual" className="h-2 w-2 rounded-full bg-purple-500" /> : null}
                 {local.some((row) => row.kind === "booking" && row.status === "confirmed") ? <span title="Reserva web" className="h-2 w-2 rounded-full bg-olive-700" /> : null}
@@ -257,9 +257,15 @@ export function AdminDashboard({ domes, checkout, siteOrigin }: { domes: Array<{
             </button>;
           })}
         </div>
+        </div>
+        <p className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted">
+          <span className="rounded-md border border-teal-200 bg-teal-50 px-2 py-1 font-semibold text-teal-950">{calendar?.pricing?.currency ?? "USD"}/noche</span>
+          <span>Turquesa: precio configurado por noche para esa fecha en esta web.</span>
+        </p>
+        <p className="mt-2 text-xs text-muted">Los precios del calendario no modifican los importes de reservas ya creadas.</p>
         <p className="mt-4 text-xs leading-relaxed text-muted">Verde: reserva web · Morado: bloqueo manual · Ámbar: pago pendiente · Rosa: Airbnb · Azul: Expedia.</p>
         <p className="mt-2 text-xs text-muted">{priceMode ? "Pulsa la primera y la última noche para cambiar el precio de todo el rango. Para una sola noche basta un clic." : "Pulsa una fecha ocupada para consultar sus detalles y liberar fechas de esta web."}</p>
-        <p className="mt-2 text-xs text-muted">Una noche puede aparecer en varios feeds por la sincronización. Los colores indican qué calendario la exporta, no necesariamente dónde se originó.</p>
+        <p className="mt-2 text-xs text-muted">Una noche puede aparecer en varios feeds por la sincronización. Los puntos de colores indican qué calendario la exporta, no necesariamente dónde se originó.</p>
       </section>
       {priceMode ? <form onSubmit={(event) => { event.preventDefault(); savePrice(); }} className="space-y-4 rounded-2xl border border-border bg-warm-white p-5">
         <h2 className="font-serif text-xl">Precio de las noches</h2>
