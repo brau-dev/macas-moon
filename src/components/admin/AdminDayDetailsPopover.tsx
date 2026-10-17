@@ -12,7 +12,7 @@ function countryName(code: string) {
   catch { return code || "No indicado"; }
 }
 
-export function AdminDayDetailsPopover({ anchor, day, dome, domeName, reservations, sources, environment, busy,
+export function AdminDayDetailsPopover({ anchor, day, dome, domeName, reservations, sources, busy,
   onClose, onRelease }: {
   anchor: HTMLButtonElement; day: string; dome: string; domeName: string;
   reservations: AdminReservation[]; sources: CalendarSource[]; environment: string; busy: boolean;
@@ -94,7 +94,7 @@ export function AdminDayDetailsPopover({ anchor, day, dome, domeName, reservatio
           <div><dt className="text-xs text-muted">Huéspedes y residencia</dt><dd>{row.guests} huéspedes · {countryName(row.country)}</dd></div>
           <div><dt className="text-xs text-muted">Importe de la reserva</dt><dd>{new Intl.NumberFormat("es-CR", {
             style: "currency", currency: row.currency,
-          }).format(row.amountCents / 100)} · {row.provider === "test" ? "Sin cobro" : environment === "Test" ? "Sin cargo real"
+          }).format(row.amountCents / 100)} · {row.provider === "test" ? "Sin cobro" : row.paymentEnvironment !== "Production" ? "Sin cargo real"
             : row.status === "confirmed" ? "Pago verificado" : "Pago pendiente"}</dd></div>
         </dl>}
         {row.paymentIssue ? <p className="mt-3 text-sm text-red-800">Requiere atención: {row.paymentIssue}</p> : null}

@@ -10,6 +10,7 @@ import { domes } from "@/data/domes";
 import { submitReservationRequest } from "@/lib/reservations";
 import { useLanguage } from "@/i18n/LanguageProvider";
 import { cn } from "@/lib/cn";
+import { todayInCostaRica } from "@/lib/date-range";
 import PhoneInput, { isValidPhoneNumber } from "react-phone-number-input";
 import flags from "react-phone-number-input/flags";
 import dePhoneLabels from "react-phone-number-input/locale/de";
@@ -289,6 +290,7 @@ export function ReservationForm({ initialDome }: ReservationFormProps) {
   const [domeSlug, setDomeSlug] = useState(selectedDefault ?? "");
   const [checkIn, setCheckIn] = useState("");
   const [checkOut, setCheckOut] = useState("");
+  const [calendarMonth, setCalendarMonth] = useState(() => todayInCostaRica().slice(0, 7));
   const [guests, setGuests] = useState("2");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -465,6 +467,9 @@ export function ReservationForm({ initialDome }: ReservationFormProps) {
 
       {domeSlug ? (
         <AvailabilityCalendar
+          month={calendarMonth}
+          onMonthChange={setCalendarMonth}
+          pricing={null}
           availability={availability}
           checkIn={checkIn}
           checkOut={checkOut}

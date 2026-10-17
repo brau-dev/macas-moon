@@ -2,6 +2,9 @@ import "server-only";
 import { Pool, type PoolClient } from "pg";
 import type { OccupiedRange } from "@/lib/availability-types";
 import { logServerError } from "@/lib/safe-log";
+import type { PaymentLinkDiagnostic } from "@/lib/checkout-error";
+import { lockPriceCalendar, readNightlyPricing } from "@/lib/nightly-pricing-db";
+import { BookingError } from "@/lib/booking-error";
 
 let pool: Pool | undefined;
 
@@ -36,11 +39,15 @@ export type Booking = {
   amount_cents: number;
   currency: string;
   payment_provider: "tilopay" | "test" | "manual";
+  payment_environment: "Test" | "Production";
   payment_reference: string | null;
   kind: "booking" | "manual";
   admin_note: string;
   payment_link_id: string | null;
   payment_link_closed_at: Date | null;
+  payment_link_consumed_at: Date | null;
+  payment_link_checked_at: Date | null;
+  payment_link_error: PaymentLinkDiagnostic | null;
   payment_issue: string | null;
   payment_checked_at: Date | null;
   expires_at: Date | null;
@@ -58,16 +65,17 @@ export type Booking = {
 
 export const bookingColumns = `id, dome, check_in::text, check_out::text, guests, guest_name, guest_email,
   guest_phone, billing_address, billing_city, billing_state, billing_postal_code,
-  billing_country, status, amount_cents, currency, payment_provider,
+  billing_country, status, amount_cents, currency, payment_provider, payment_environment,
   payment_reference, expires_at, confirmation_email_sent_at, kind, admin_note,
-  payment_link_id, payment_link_closed_at, payment_issue, payment_checked_at,
+  payment_link_id, payment_link_closed_at, payment_link_consumed_at, payment_link_checked_at, payment_link_error,
+  payment_issue, payment_checked_at,
   owner_notification_sent_at, owner_notification_required, cancelled_at, cancelled_by,
   cancellation_reason, cancelled_from_status, cancellation_check_in::text,
   cancellation_check_out::text, parent_block_id`;
 
 export type NewBooking = Pick<Booking, "id" | "dome" | "check_in" | "check_out" | "guests" |
   "guest_name" | "guest_email" | "guest_phone" | "billing_country" | "amount_cents" |
-  "currency" | "payment_provider" | "payment_reference">;
+  "currency" | "payment_provider" | "payment_reference" | "payment_environment">;
 
 export async function transaction<T>(run: (client: PoolClient) => Promise<T>) {
   const client = await getPool().connect();
@@ -95,18 +103,27 @@ export async function releaseExpiredNights(client: PoolClient) {
 
 export async function createBooking(booking: NewBooking) {
   return transaction(async (client) => {
+    // Edits and new bookings lock the same dome row. The customer's accepted
+    // quote is checked inside this transaction, before any hold or payment link.
+    await lockPriceCalendar(client, booking.dome);
+    const pricing = await readNightlyPricing(client, booking.dome, booking.check_in, booking.check_out);
+    if (pricing.amountCents !== booking.amount_cents || pricing.currency !== booking.currency) {
+      throw new BookingError("El precio cambió. Revisa el total actualizado y vuelve a continuar.", 409);
+    }
+    if (booking.amount_cents > 2147483647) throw new BookingError("Importe fuera del límite permitido.", 400);
     // Marking expired locks the reservation rows. A simultaneous confirmation
     // cannot later lose its unique night rows during cleanup.
     await releaseExpiredNights(client);
     await client.query(`INSERT INTO reservations
       (id, dome, check_in, check_out, guests, guest_name, guest_email, guest_phone,
        billing_country,
-       status, amount_cents, currency, payment_provider, payment_reference, expires_at)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending',$10,$11,$12,$13,now() + interval '30 minutes')`,
+       status, amount_cents, currency, payment_provider, payment_reference, payment_environment, nightly_prices, expires_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending',$10,$11,$12,$13,$14,$15::jsonb,now() + interval '30 minutes')`,
       [booking.id, booking.dome, booking.check_in, booking.check_out, booking.guests,
         booking.guest_name, booking.guest_email, booking.guest_phone,
         booking.billing_country, booking.amount_cents,
-        booking.currency, booking.payment_provider, booking.payment_reference]);
+        booking.currency, booking.payment_provider, booking.payment_reference, booking.payment_environment,
+        JSON.stringify(pricing.nights)]);
     await client.query(`INSERT INTO reservation_nights (reservation_id, dome, night)
       SELECT $1, $2, day::date FROM generate_series($3::date, $4::date - 1, interval '1 day') day`,
       [booking.id, booking.dome, booking.check_in, booking.check_out]);

@@ -1,7 +1,8 @@
 import "server-only";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { getPool, savePaymentLink, type Booking } from "@/lib/booking-db";
-import { CheckoutError, checkoutStep, type CheckoutStage } from "@/lib/checkout-error";
+import { CheckoutError, checkoutStep, paymentLinkDiagnostic, type CheckoutStage } from "@/lib/checkout-error";
+import { logServerError } from "@/lib/safe-log";
 import { trustedTilopayPaymentUrl } from "@/lib/tilopay-payment-url";
 import { validDate } from "@/lib/booking-validation";
 import { addDays } from "@/lib/date-range";
@@ -10,7 +11,7 @@ const API = "https://app.tilopay.com/api/v1";
 
 async function api<T>(path: string, body: object | null, bearer?: string): Promise<T> {
   const stage: CheckoutStage = path === "login" ? "tilopay_auth"
-    : path === "createLinkPayment" ? "tilopay_link" : "tilopay_check";
+    : path === "createLinkPayment" ? "tilopay_link" : path === "deleteLinkPayment" ? "tilopay_close" : "tilopay_check";
   return checkoutStep(stage, async () => {
     const response = await fetch(`${API}/${path}`, {
       method: body === null ? "GET" : "POST",
@@ -65,6 +66,7 @@ async function token() {
 }
 
 export async function createPaymentUrl(booking: Booking, siteUrl: string) {
+  requirePaymentEnvironment(booking);
   const { key } = credentials();
   const result = await api<{ type?: string; url?: string; id?: number }>("createLinkPayment", {
     key,
@@ -96,6 +98,21 @@ type Payment = { orderNumber?: string; amount?: string; currency?: string; code?
 type LinkPayment = { orderNumber?: string; id?: number | string; amount?: string;
   currency?: string; code?: string; create?: string };
 type PaymentCandidate = { order: string; transactionId?: string };
+type LinkDetail = { type?: string | number; id?: number; reference?: string; amount?: string; currency?: string };
+type LinkResult = { type?: string | number; detail?: LinkDetail; payments?: LinkPayment[] };
+
+async function readLinkDetail(booking: Booking, key: string, bearer: string) {
+  const result = await api<LinkResult>(
+    `getDetailLinkPayment/${encodeURIComponent(booking.payment_link_id!)}/${encodeURIComponent(key)}`, null, bearer);
+  if (String(result.type) !== "200" || !result.detail || !Array.isArray(result.payments)) {
+    throw new CheckoutError("tilopay_check", "invalid_response", { providerCode: result.type });
+  }
+  if (String(result.detail.id) !== booking.payment_link_id || result.detail.reference !== booking.payment_reference ||
+    result.detail.currency !== booking.currency || !amountMatches(result.detail.amount, booking.amount_cents)) {
+    throw new CheckoutError("tilopay_check", "link_mismatch");
+  }
+  return { detail: result.detail, payments: result.payments };
+}
 
 function paymentId(value: unknown): string | null {
   if ((typeof value !== "number" && typeof value !== "string") ||
@@ -147,7 +164,7 @@ async function linkPaymentCandidates(payments: LinkPayment[], booking: Booking,
   for (const [day, ids] of unresolved) {
     const result = await api<{ type?: string; response?: Payment[] }>("consultTransactions", {
       key, startDate: `${addDays(day, -1)} 00:00:00`, endDate: `${addDays(day, 1)} 23:59:59`,
-      onlyAproved: 1, environment: process.env.TILOPAY_EXPECTED_ENVIRONMENT === "Test" ? 1 : 0,
+      onlyAproved: 1, environment: booking.payment_environment === "Test" ? 1 : 0,
       currency: [booking.currency], merchantId: process.env.TILOPAY_MERCHANT_ID ?? "",
     }, bearer);
     if (result.type !== "200" || !Array.isArray(result.response) || result.response.length > 2000) {
@@ -169,7 +186,7 @@ async function linkPaymentCandidates(payments: LinkPayment[], booking: Booking,
 }
 
 function matchesApprovedTerms(payment: Payment, booking: Booking, order: string) {
-  const expectedEnvironment = process.env.TILOPAY_EXPECTED_ENVIRONMENT;
+  const expectedEnvironment = booking.payment_environment;
   if (expectedEnvironment !== "Test" && expectedEnvironment !== "Production") {
     throw new Error("TILOPAY_EXPECTED_ENVIRONMENT must be Test or Production");
   }
@@ -187,25 +204,15 @@ export function matchesApprovedPayment(payment: Payment, booking: Booking, order
     (!process.env.TILOPAY_MERCHANT_ID || String(payment.merchantId) === process.env.TILOPAY_MERCHANT_ID);
 }
 
-export async function paymentApproved(booking: Booking) {
+async function verifiedPayment(booking: Booking, key: string, bearer: string,
+  link?: { detail: LinkDetail; payments: LinkPayment[] }) {
   if (!booking.payment_reference) return false;
   if (!["Test", "Production"].includes(process.env.TILOPAY_EXPECTED_ENVIRONMENT ?? "")) {
     throw new CheckoutError("tilopay_check", "unsupported_payment");
   }
-  const { key } = credentials();
-  const bearer = await token();
   let candidates: PaymentCandidate[] = [{ order: booking.payment_reference }];
   if (booking.payment_link_id) {
-    const result = await api<{ type?: string; detail?: { id?: number; reference?: string;
-      amount?: string; currency?: string }; payments?: LinkPayment[] }>(
-      `getDetailLinkPayment/${encodeURIComponent(booking.payment_link_id)}/${encodeURIComponent(key)}`, null, bearer);
-    if (result.type !== "200" || !result.detail || !Array.isArray(result.payments)) {
-      throw new CheckoutError("tilopay_check", "invalid_response");
-    }
-    if (String(result.detail.id) !== booking.payment_link_id || result.detail.reference !== booking.payment_reference ||
-      result.detail.currency !== booking.currency || !amountMatches(result.detail.amount, booking.amount_cents)) {
-      throw new CheckoutError("tilopay_check", "link_mismatch");
-    }
+    const result = link ?? await readLinkDetail(booking, key, bearer);
     candidates = await linkPaymentCandidates(result.payments, booking, key, bearer);
   }
   for (const { order, transactionId } of candidates) {
@@ -220,10 +227,67 @@ export async function paymentApproved(booking: Booking) {
   return false;
 }
 
-export async function closeInactivePaymentLink(booking: Booking) {
-  if (!booking.payment_link_id || booking.payment_link_closed_at || !["expired", "cancelled"].includes(booking.status)) return;
+export function requirePaymentEnvironment(booking: Pick<Booking, "payment_environment">) {
+  if (!["Test", "Production"].includes(process.env.TILOPAY_EXPECTED_ENVIRONMENT ?? "") ||
+    booking.payment_environment !== process.env.TILOPAY_EXPECTED_ENVIRONMENT) {
+    throw new CheckoutError("tilopay_check", "environment_mismatch");
+  }
+}
+
+export async function paymentApproved(booking: Booking) {
+  if (!booking.payment_reference) return false;
+  requirePaymentEnvironment(booking);
   const { key } = credentials();
-  const result = await api<{ type?: string }>("deleteLinkPayment", { key, id: booking.payment_link_id }, await token());
-  if (result.type !== "200") throw new Error("Tilopay could not close the expired payment link");
-  await getPool().query("UPDATE reservations SET payment_link_closed_at = now() WHERE id = $1", [booking.id]);
+  return verifiedPayment(booking, key, await token());
+}
+
+export async function closeInactivePaymentLink(booking: Booking) {
+  if (booking.payment_provider !== "tilopay" || !booking.payment_link_id || booking.payment_link_closed_at ||
+    booking.payment_link_consumed_at || !["expired", "cancelled"].includes(booking.status)) return;
+  requirePaymentEnvironment(booking);
+  // Atomically claim the attempt across serverless instances. Provider calls are
+  // outside a transaction; never hold a DB connection open while waiting for HTTP.
+  const claimed = await getPool().query<Booking>(`UPDATE reservations SET payment_link_checked_at = now()
+    WHERE id = $1 AND status IN ('expired','cancelled') AND payment_provider = 'tilopay'
+      AND payment_link_id IS NOT NULL AND payment_link_closed_at IS NULL AND payment_link_consumed_at IS NULL
+      AND (payment_link_checked_at IS NULL OR payment_link_checked_at < now() - interval '2 minutes')
+    RETURNING *`, [booking.id]);
+  if (!claimed.rows.length) return;
+  // Preserve date-only strings from the caller; the claim does not alter them.
+  const current = { ...booking, ...claimed.rows[0], check_in: booking.check_in, check_out: booking.check_out };
+  const reference = randomUUID();
+  try {
+    await checkoutStep("payment_link_resolution", async () => {
+      const { key } = credentials();
+      const bearer = await token();
+      if (current.status === "cancelled" && current.cancelled_from_status === "confirmed") {
+        const link = await readLinkDetail(current, key, bearer);
+        // Do not infer consumption from a local status, a rejected attempt, or
+        // an unlimited/unknown link. Authenticate the exact approved transaction.
+        const singleUse = /^(1|single[ -]?use|single|one[ -]?time)$/i.test(String(link.detail.type));
+        if (singleUse && await verifiedPayment(current, key, bearer, link)) {
+          await getPool().query(`UPDATE reservations SET payment_link_consumed_at = now(), payment_link_error = NULL
+            WHERE id = $1 AND payment_link_id = $2 AND status = 'cancelled' AND cancelled_from_status = 'confirmed'`,
+          [booking.id, current.payment_link_id]);
+          return;
+        }
+      }
+      const result = await api<{ type?: string | number; status?: number | string }>("deleteLinkPayment",
+        { key, id: current.payment_link_id }, bearer);
+      if (String(result.type) !== "200" || (result.status !== undefined && String(result.status) !== "1")) {
+        throw new CheckoutError("tilopay_close", "rejected", { providerCode: result.type, providerStatus: result.status });
+      }
+      await getPool().query(`UPDATE reservations SET payment_link_closed_at = now(), payment_link_error = NULL
+        WHERE id = $1 AND payment_link_id = $2 AND status IN ('cancelled','expired')`, [booking.id, current.payment_link_id]);
+    });
+  } catch (error) {
+    const diagnostic = paymentLinkDiagnostic(error, reference);
+    logServerError("Payment link resolution failed", error, reference);
+    try {
+      await getPool().query(`UPDATE reservations SET payment_link_error = $2::jsonb
+        WHERE id = $1 AND payment_link_closed_at IS NULL AND payment_link_consumed_at IS NULL`,
+      [booking.id, JSON.stringify(diagnostic)]);
+    } catch (saveError) { logServerError("Payment link diagnostic save failed", saveError, reference); }
+    throw error;
+  }
 }

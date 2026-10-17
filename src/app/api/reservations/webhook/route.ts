@@ -21,8 +21,8 @@ export async function POST(request: Request) {
   }
   try {
     const result = await getPool().query<{ id: string }>(
-      "SELECT id FROM reservations WHERE payment_link_id = $1 OR payment_reference = $2",
-      [validLinkId ? String(linkId) : null, validReference ? reference : null]);
+      "SELECT id FROM reservations WHERE payment_environment = $3 AND (payment_link_id = $1 OR payment_reference = $2)",
+      [validLinkId ? String(linkId) : null, validReference ? reference : null, process.env.TILOPAY_EXPECTED_ENVIRONMENT]);
     if (result.rows[0]) await reconcilePayment(result.rows[0].id);
     // Webhook content alone cannot confirm a booking: reconcilePayment queries Tilopay.
     return new Response(null, { status: 200 });

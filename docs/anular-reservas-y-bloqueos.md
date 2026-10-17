@@ -34,9 +34,13 @@ ni se reembolsa dinero. Un reembolso se gestiona y comprueba separadamente en Ti
 No se envía un correo de cancelación en esta función; comunica el cambio al huésped.
 Los correos de confirmación anteriores y las incidencias se conservan como historial.
 
-Se intenta cerrar el enlace de pago para evitar nuevos intentos. Si Tilopay falla,
-la anulación local se conserva y se muestra una advertencia; el respaldo reintenta
-el cierre. Si un pago aún no verificado llega después de anular, queda como incidencia:
+Se comprueba el enlace de pago sin deshacer la anulación. Si la reserva ya estaba
+pagada, se consulta a Tilopay y se verifica que el enlace sea de un solo uso, corresponda
+a la reserva y tenga el pago aprobado/capturado correcto. En ese caso se registra
+**uso consumido**, no un cierre ficticio, y no se intenta borrarlo repetidamente.
+Para los demás enlaces se solicita el cierre. Si Tilopay falla, la anulación local
+se conserva y el detalle seguro del fallo queda visible en la ficha; el respaldo reintenta.
+Si un pago aún no verificado llega después de anular, queda como incidencia:
 no se reactiva la reserva ni se recuperan noches que ya pudo reservar otra persona.
 Anular una reserva que ya estaba confirmada no se confunde con un nuevo pago tardío.
 
@@ -72,7 +76,35 @@ administrador: pulsar días no añade consultas a la base.
 Si el cierre solo se importa por iCal, el cuadro indica Airbnb o Expedia, sin
 inventar datos de huéspedes ni ofrecer liberarlo desde esta web. Estos detalles
 son exclusivos del panel autenticado; no se añadieron al calendario público ni
-al iCal. Esta mejora de interfaz no necesita una migración adicional a la 0004.
+al iCal. El cuadro de detalles no necesita una migración propia; la gestión del
+estado de enlaces descrita a continuación requiere la 0005.
+
+## Revisar un enlace desde el panel, sin buscar logs
+
+1. Entra en `/admin`, elige el domo y el mes de la reserva.
+2. Pulsa **Mostrar historial** para localizar la reserva anulada o solicitud vencida.
+3. Si el enlace sigue sin resolverse, pulsa **Revisar enlace de pago**.
+4. La ficha mostrará uno de estos resultados:
+   - **Enlace de un solo uso: pago verificado y uso consumido.** Tilopay confirmó
+     el uso de ese enlace y la transacción exacta. La reserva sigue anulada.
+   - **Enlace de pago cerrado en Tilopay.** El proveedor confirmó el cierre.
+   - **Estado sin confirmar.** No se afirma que esté abierto, cerrado ni que admita
+     otro pago. Expande **Información para soporte** y comparte esa referencia,
+     etapa y códigos, sin contraseñas ni datos de tarjeta.
+
+Estos pasos no crean pagos, no reembolsan, no cambian importes y no reactivan noches.
+No necesitas repetir una reserva ni volver a pagar para probar esta revisión.
+El botón requiere sesión administrativa y solo actúa sobre solicitudes vencidas
+o reservas anuladas del domo indicado. No cierra enlaces de reservas activas.
+
+Los intentos del botón y del respaldo se coordinan en PostgreSQL: como máximo un
+intento por registro cada dos minutos, incluso entre distintas funciones. El respaldo
+mantiene su programación de 15 minutos si `BOOKING_RECONCILE_ENABLED=true`.
+Los enlaces cerrados o consumidos dejan de entrar en la cola de cierre; consultar
+el calendario no ejecuta esta operación. Un error no se transforma en éxito para
+quitar una advertencia. No se guardan respuestas crudas de Tilopay ni enlaces privados
+en el diagnóstico. El respaldo muestra además un resumen de operaciones fallidas
+en los registros de `reconcile-reservations`, sin datos personales.
 
 ## Airbnb y Expedia
 
@@ -87,19 +119,31 @@ todavía las exporta. No desconectes/reconectes calendarios para intentar forzar
 
 ## Migración necesaria antes de publicar
 
-Esta función requiere **0004_admin_cancellations.sql** en la misma base que usa
-el deploy. Añade columnas de auditoría; no borra reservas ni modifica importes.
+La anulación requiere **0004_admin_cancellations.sql** y la gestión de enlaces
+requiere **0005_payment_link_resolution.sql** en la misma base que usa el deploy.
+El paso posterior a producción requiere además **0006_payment_environment.sql**:
+registra como Test el historial de este sitio (que solo ha operado en pruebas) y
+guarda explícitamente el entorno de cada reserva nueva. No se debe reutilizar esa
+base histórica Test para un negocio ajeno con cobros anteriores desconocidos.
+Son cambios aditivos: no borran reservas ni modifican importes. La 0005 añade fechas
+de comprobación/consumo y un diagnóstico seguro; no marca enlaces antiguos como
+resueltos sin consultarlos.
 
 - Con Netlify Database y su sistema nativo, la migración está preparada en
-  `netlify/database/migrations/0004_admin_cancellations.sql`. Comprueba en el
-  registro de publicación que se aplique antes de publicar esta versión.
+  `netlify/database/migrations/0004_admin_cancellations.sql` y
+  `netlify/database/migrations/0005_payment_link_resolution.sql`, seguidas de
+  `netlify/database/migrations/0006_payment_environment.sql`. Comprueba en el
+  registro de publicación que se apliquen antes de publicar esta versión.
   Si falla, no publiques manualmente código contra una base sin actualizar.
 - Si gestionas las migraciones manualmente o usas una base externa, ejecuta
-  **solo el contenido de `db/004_admin_cancellations.sql`**, después de las
-  migraciones anteriores y antes de publicar. Usa el editor SQL de la base
+  las migraciones pendientes en orden: `db/004_admin_cancellations.sql` y después
+  `db/005_payment_link_resolution.sql` y `db/006_payment_environment.sql`, tras las
+  migraciones anteriores y antes de publicar. Aplica solo las pendientes. Usa el editor SQL de la base
   correspondiente; no pegues el archivo en variables de entorno.
 
 [Funcionamiento de las migraciones nativas de Netlify](https://docs.netlify.com/build/data-and-storage/netlify-database/migrations/).
 No hacen falta credenciales ni variables nuevas. Tilopay continúa en Test y se
-mantiene la dirección del sitio de pruebas. El código no modifica reservas reales
-hasta que un administrador inicia sesión y confirma una acción.
+mantiene la dirección del sitio de pruebas. No se han aplicado estas migraciones
+a una base remota ni se han modificado reservas reales durante esta implementación.
+Una vez desplegado, el administrador y el respaldo habilitado gestionan los enlaces
+pendientes; consultar el calendario por sí solo no los modifica.

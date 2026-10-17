@@ -77,9 +77,15 @@ export function validateBookingEnv(values, { production = false } = {}) {
     requireFlag("TILOPAY_CHECKOUT_ENABLED", "true");
     for (const key of ["TILOPAY_API_USER", "TILOPAY_API_PASSWORD", "TILOPAY_API_KEY", "NEXT_PUBLIC_TURNSTILE_SITE_KEY",
       "TURNSTILE_SECRET_KEY", "ADMIN_USERNAME", "ADMIN_PASSWORD_HASH"]) requireValue(key);
+    const dummySiteKeys = new Set(["1x00000000000000000000AA", "2x00000000000000000000AB", "1x00000000000000000000BB", "2x00000000000000000000BB", "3x00000000000000000000FF"]);
+    const dummySecrets = new Set(["1x0000000000000000000000000000000AA", "2x0000000000000000000000000000000AA", "3x0000000000000000000000000000000AA"]);
+    if (dummySiteKeys.has(get("NEXT_PUBLIC_TURNSTILE_SITE_KEY")) || dummySecrets.has(get("TURNSTILE_SECRET_KEY"))) {
+      errors.push("Turnstile debe usar las claves del widget del sitio, no las claves públicas de demostración, incluso con Tilopay en Test.");
+    }
     for (const key of missingEmailConfig(Object.fromEntries(values))) errors.push(`${key}: configura Gmail y su contraseña de aplicación de 16 caracteres (no tu contraseña normal).`);
     if (!["Test", "Production"].includes(get("TILOPAY_EXPECTED_ENVIRONMENT"))) errors.push("TILOPAY_EXPECTED_ENVIRONMENT debe ser Test o Production.");
     if (production && get("TILOPAY_EXPECTED_ENVIRONMENT") !== "Production") errors.push("Producción requiere TILOPAY_EXPECTED_ENVIRONMENT=Production y una cuenta de comercio en ese modo.");
+    if (production && get("BOOKING_RECONCILE_ENABLED") !== "true") errors.push("Producción requiere BOOKING_RECONCILE_ENABLED=true para el respaldo de pagos, enlaces y correos.");
     if (get("BOOKING_RECONCILE_ENABLED") !== "true") warnings.push("La conciliación de respaldo está apagada; webhook/retorno no sustituyen todos los reintentos.");
     if (get("BOOKING_REPLY_TO") && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(get("BOOKING_REPLY_TO"))) errors.push("BOOKING_REPLY_TO debe ser un correo válido.");
   }

@@ -24,8 +24,12 @@ const login = await request("/admin/login", 200);
 assert.match(login.headers.get("cache-control") ?? "", /no-store/);
 assert.equal(login.headers.get("referrer-policy"), "no-referrer");
 assert.match(login.headers.get("x-robots-tag") ?? "", /noindex/);
-for (const path of ["/api/admin/calendar", "/api/reservations/not-a-uuid", "/.env.netlify", "/.env.local", "/db/001_reservations.sql", "/db/004_admin_cancellations.sql", "/docs/deploy-reservas-con-pago.md"]) {
+for (const path of ["/api/admin/calendar", "/api/reservations/not-a-uuid", "/.env.netlify", "/.env.local", "/db/001_reservations.sql", "/db/004_admin_cancellations.sql", "/db/005_payment_link_resolution.sql", "/db/006_payment_environment.sql", "/db/007_nightly_prices.sql", "/docs/deploy-reservas-con-pago.md", "/docs/deploy-casi-final.md"]) {
   await request(path, path.includes("admin/calendar") ? 401 : path.includes("not-a-uuid") ? 400 : 404);
+}
+for (const method of ["PUT", "DELETE"]) {
+  await request("/api/admin/prices", 401, { method, headers: { origin: base.origin, "Content-Type": "application/json" }, body: "{}" });
+  await request("/api/admin/prices", 403, { method, headers: { origin: "https://attacker.invalid", "Content-Type": "application/json" }, body: "{}" });
 }
 const pricing = await request("/api/pricing", 200);
 assert.match(pricing.headers.get("cache-control") ?? "", /no-store/);

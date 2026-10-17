@@ -21,7 +21,7 @@ async function deliver(id: string, audience: Audience) {
       (audience === "owner" && !booking.owner_notification_required)) return false;
 
     const sender = process.env.SMTP_USER!.trim();
-    const content = bookingEmails(booking, process.env.TILOPAY_EXPECTED_ENVIRONMENT, getSiteOrigin())[audience];
+    const content = bookingEmails(booking, getSiteOrigin())[audience];
     const transport = nodemailer.createTransport(gmailOptions(process.env));
     try {
       const result = await transport.sendMail({

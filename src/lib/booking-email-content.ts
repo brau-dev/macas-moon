@@ -41,8 +41,8 @@ ${action ? `<p style="margin:24px 0"><a href="${escape(action.url)}" style="disp
   };
 }
 
-export function bookingEmails(booking: Booking, environment: string | undefined, siteOrigin: string | null) {
-  const test = booking.payment_provider === "test" || environment === "Test";
+export function bookingEmails(booking: Booking, siteOrigin: string | null) {
+  const test = booking.payment_provider === "test" || booking.payment_environment !== "Production";
   const reference = booking.id.slice(0, 8).toUpperCase();
   const total = new Intl.NumberFormat("es-CR", { style: "currency", currency: booking.currency }).format(booking.amount_cents / 100);
   const country = /^[A-Z]{2}$/.test(booking.billing_country)

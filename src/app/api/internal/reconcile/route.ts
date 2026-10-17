@@ -22,13 +22,14 @@ export async function POST(request: Request) {
       (status = 'pending' OR (payment_issue IS NULL AND created_at > now() - interval '7 days'
         AND (status = 'expired' OR cancelled_from_status IN ('pending','expired')))) AS verify_payment
       FROM reservations
-      WHERE payment_provider = 'tilopay' AND
+      WHERE payment_provider = 'tilopay' AND payment_environment = $1 AND
         (status = 'pending' OR (status IN ('expired','cancelled') AND
           ((created_at > now() - interval '7 days' AND payment_issue IS NULL
             AND (status = 'expired' OR cancelled_from_status IN ('pending','expired'))) OR
-           (payment_link_id IS NOT NULL AND payment_link_closed_at IS NULL))))
+           (payment_link_id IS NOT NULL AND payment_link_closed_at IS NULL AND payment_link_consumed_at IS NULL
+             AND (payment_link_checked_at IS NULL OR payment_link_checked_at < now() - interval '2 minutes')))))
       ORDER BY CASE WHEN status = 'pending' THEN 0 ELSE 1 END,
-        payment_checked_at ASC NULLS FIRST, created_at LIMIT 20`);
+        payment_link_checked_at ASC NULLS FIRST, payment_checked_at ASC NULLS FIRST, created_at LIMIT 20`, [process.env.TILOPAY_EXPECTED_ENVIRONMENT]);
     let failures = 0;
     const deadline = Date.now() + 18_000;
     for (const row of pending.rows) {
@@ -46,9 +47,9 @@ export async function POST(request: Request) {
       catch (error) { failures++; logServerError("Expired payment link cleanup failed", error); }
     }
     const unsent = await getPool().query<Booking>(`SELECT ${bookingColumns}
-      FROM reservations WHERE kind = 'booking' AND status = 'confirmed' AND
+      FROM reservations WHERE kind = 'booking' AND status = 'confirmed' AND payment_environment = $1 AND
         (confirmation_email_sent_at IS NULL OR (owner_notification_required AND owner_notification_sent_at IS NULL))
-      ORDER BY confirmed_at LIMIT 50`);
+      ORDER BY confirmed_at LIMIT 50`, [process.env.TILOPAY_EXPECTED_ENVIRONMENT]);
     for (const row of unsent.rows) {
       if (Date.now() > deadline) break;
       try { await sendConfirmation(row); }

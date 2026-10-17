@@ -10,8 +10,7 @@ import { isDomeActive } from "@/lib/active-domes";
 import { getCombinedAvailability } from "@/lib/combined-availability";
 import { overlapsBlocked } from "@/lib/availability-types";
 import { createBooking, getBooking, confirmBooking, expireBooking, recordPaymentCheck, type NewBooking } from "@/lib/booking-db";
-import { nightsBetween } from "@/lib/date-range";
-import { createPaymentUrl, paymentApproved } from "@/lib/tilopay";
+import { createPaymentUrl, paymentApproved, requirePaymentEnvironment } from "@/lib/tilopay";
 import { sendConfirmation } from "@/lib/booking-email";
 import { cleanField as clean, validateStay } from "@/lib/booking-validation";
 import { isResidenceCountry } from "@/lib/countries";
@@ -49,13 +48,6 @@ function validate(input: unknown): BookingInput {
   };
 }
 
-function pricePerNight(dome: string) {
-  const key = dome === "domo-romantico" ? "PRICE_DOMO_ROMANTICO_CENTS" : "PRICE_DOMO_AMPLIO_CENTS";
-  const value = Number(process.env[key]);
-  if (!Number.isSafeInteger(value) || value <= 0) throw new BookingError("Tarifas aún no configuradas.", 503);
-  return value;
-}
-
 export async function startReservation(raw: unknown, testSecret: string | null, requestOrigin: string) {
   const test = testSecret !== null;
   if (process.env.BOOKING_ENABLED !== "true") throw new BookingError("Reservas en línea aún no habilitadas.", 503);
@@ -78,9 +70,9 @@ export async function startReservation(raw: unknown, testSecret: string | null, 
   const currency = process.env.BOOKING_CURRENCY;
   if (!currency || !/^[A-Z]{3}$/.test(currency)) throw new BookingError("Moneda no configurada.", 503);
   const id = randomUUID();
-  const amount = pricePerNight(input.dome) * nightsBetween(input.checkIn, input.checkOut);
-  if (!Number.isSafeInteger(amount) || Number((raw as Record<string, unknown>).expectedAmountCents) !== amount) {
-    throw new BookingError("El precio cambió. Actualiza la página antes de continuar.", 409);
+  const amount = (raw as Record<string, unknown>).expectedAmountCents;
+  if (typeof amount !== "number" || !Number.isSafeInteger(amount) || amount <= 0) {
+    throw new BookingError("Revisa el precio de la estadía antes de continuar.", 400);
   }
   const siteUrl = getSiteOrigin();
   if (!test && !siteUrl) {
@@ -91,10 +83,12 @@ export async function startReservation(raw: unknown, testSecret: string | null, 
     guests: input.guests, guest_name: input.name, guest_email: input.email,
     guest_phone: input.phone, billing_country: input.country,
     amount_cents: amount, currency, payment_provider: test ? "test" : "tilopay",
+    payment_environment: test ? "Test" : process.env.TILOPAY_EXPECTED_ENVIRONMENT as "Test" | "Production",
     payment_reference: test ? null : `MM${id.replaceAll("-", "").toUpperCase()}`,
   };
   try { await createBooking(booking); }
   catch (error) {
+    if (error instanceof BookingError) throw error;
     if (error && typeof error === "object" && "code" in error && error.code === "23505") {
       throw new BookingError("Estas fechas acaban de reservarse. Elige otras.", 409);
     }
@@ -128,6 +122,7 @@ export async function reconcilePayment(id: string) {
   // An administrator deliberately cancelled an already confirmed payment.
   // Never reactivate it or misreport that known charge as a new late payment.
   if (booking.status === "cancelled" && booking.cancelled_from_status === "confirmed") return booking;
+  requirePaymentEnvironment(booking);
   // Timestamp failed checks too, so one failing row cannot starve reconciliation.
   await recordPaymentCheck(id);
   const approved = await paymentApproved(booking);

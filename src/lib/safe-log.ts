@@ -3,7 +3,7 @@ import { CheckoutError } from "@/lib/checkout-error";
 // Never log provider bodies, credentials, URLs, SQL details, guest data or stacks.
 export function logServerError(event: string, error: unknown, requestId?: string) {
   const details: { code?: string; status?: number; stage?: string; reason?: string;
-    upstreamStatus?: number; providerCode?: string; requestId?: string } = {};
+    upstreamStatus?: number; providerCode?: string; providerStatus?: string; requestId?: string } = {};
   if (requestId && /^[a-f0-9-]{36}$/.test(requestId)) details.requestId = requestId;
   if (error instanceof CheckoutError) {
     details.stage = error.stage;
@@ -11,6 +11,7 @@ export function logServerError(event: string, error: unknown, requestId?: string
     if (error.upstreamStatus && Number.isInteger(error.upstreamStatus) &&
       error.upstreamStatus >= 400 && error.upstreamStatus <= 599) details.upstreamStatus = error.upstreamStatus;
     if (error.providerCode) details.providerCode = error.providerCode;
+    if (error.providerStatus) details.providerStatus = error.providerStatus;
   }
   // Network drivers often put the useful code inside Error.cause.
   let current = error;

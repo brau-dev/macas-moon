@@ -9,6 +9,7 @@ import { cleanField, validateStay } from "@/lib/booking-validation";
 import { getCalendarSources } from "@/lib/ical";
 import { getCombinedAvailability } from "@/lib/combined-availability";
 import { overlapsBlocked } from "@/lib/availability-types";
+import { adminPrices } from "@/lib/admin-pricing";
 
 export function validateAdminDome(dome: string) {
   if (!getDome(dome) || !isDomeActive(dome)) throw new BookingError("Domo no habilitado.", 400);
@@ -18,12 +19,13 @@ export async function adminCalendar(dome: string, start: string, end: string, re
   // An administrator can inspect either property even before online sales are enabled.
   // Mutations still require an active dome and fully verified calendars.
   if (!getDome(dome)) throw new BookingError("Domo desconocido.", 400);
-  const [imported, reservations, issues] = await Promise.all([
+  const [imported, reservations, issues, pricing] = await Promise.all([
     getCalendarSources(dome, refresh),
     getPool().query<Booking>(`SELECT ${bookingColumns} FROM reservations
       WHERE dome = $1 AND check_in < $3::date AND check_out > $2::date ORDER BY check_in, created_at`, [dome, start, end]),
     getPool().query<Booking>(`SELECT ${bookingColumns} FROM reservations
       WHERE dome = $1 AND payment_issue IS NOT NULL ORDER BY created_at DESC LIMIT 50`, [dome]),
+    adminPrices(dome, start, end),
   ]);
   // Viewing a calendar must not run cleanup transactions. Expired holds are
   // displayed correctly without writes; booking/block creation still releases
@@ -33,15 +35,21 @@ export async function adminCalendar(dome: string, start: string, end: string, re
     kind: row.kind, status: row.status === "pending" && row.expires_at && row.expires_at.valueOf() <= now ? "expired" : row.status,
     name: row.guest_name, email: row.guest_email, phone: row.guest_phone,
     country: row.billing_country, guests: row.guests, amountCents: row.amount_cents, currency: row.currency,
-    provider: row.payment_provider, note: row.admin_note, expiresAt: row.expires_at?.toISOString() ?? null,
+    provider: row.payment_provider, paymentEnvironment: row.payment_environment,
+    note: row.admin_note, expiresAt: row.expires_at?.toISOString() ?? null,
     emailSent: Boolean(row.confirmation_email_sent_at), ownerEmailRequired: row.owner_notification_required,
     ownerEmailSent: Boolean(row.owner_notification_sent_at), paymentIssue: row.payment_issue,
     cancelledAt: row.cancelled_at?.toISOString() ?? null, cancelledBy: row.cancelled_by,
     cancellationReason: row.cancellation_reason, cancelledFrom: row.cancelled_from_status,
     cancellationStart: row.cancellation_check_in, cancellationEnd: row.cancellation_check_out,
     parentBlockId: row.parent_block_id,
-    paymentLinkPending: Boolean(row.status === "cancelled" && row.payment_link_id && !row.payment_link_closed_at) });
-  return { dome, bookingEnabled: isDomeActive(dome), reservations: reservations.rows.map(expose), issues: issues.rows.map(expose),
+    paymentLinkPending: Boolean(row.payment_provider === "tilopay" && ["cancelled", "expired"].includes(row.status) && row.payment_link_id &&
+      !row.payment_link_closed_at && !row.payment_link_consumed_at),
+    paymentLinkState: row.payment_provider !== "tilopay" || !["cancelled", "expired"].includes(row.status) || !row.payment_link_id ? null
+      : row.payment_link_closed_at ? "closed" as const : row.payment_link_consumed_at ? "consumed" as const : "pending" as const,
+    paymentLinkCheckedAt: row.payment_link_checked_at?.toISOString() ?? null,
+    paymentLinkDiagnostic: row.payment_link_error });
+  return { dome, pricing, bookingEnabled: isDomeActive(dome), reservations: reservations.rows.map(expose), issues: issues.rows.map(expose),
     imported: imported.map((source) => ({ ...source,
       blocked: source.blocked.filter((range) => range.start < end && range.end > start) })),
     checkedAt: new Date().toISOString() };

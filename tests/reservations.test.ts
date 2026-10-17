@@ -12,9 +12,11 @@ function adminReservationFixture(change: Partial<AdminReservation> = {}): AdminR
     checkIn: "2031-06-01", checkOut: "2031-06-03", kind: "booking", status: "confirmed",
     name: "Fixture Guest", email: "guest@example.com", phone: "+50688888888", country: "CR", guests: 2,
     amountCents: 34000, currency: "USD", provider: "tilopay", note: "", expiresAt: null,
+    paymentEnvironment: "Test",
     emailSent: true, ownerEmailRequired: true, ownerEmailSent: true, paymentIssue: null,
     cancelledAt: null, cancelledBy: null, cancellationReason: null, cancelledFrom: null,
     cancellationStart: null, cancellationEnd: null, parentBlockId: null, paymentLinkPending: false,
+    paymentLinkState: null, paymentLinkCheckedAt: null, paymentLinkDiagnostic: null,
     ...change };
 }
 
@@ -48,10 +50,23 @@ test("reservations, payments, iCal and private administration", async (t) => {
   await sql.exec(cancellations);
   await sql.exec(cancellations);
   assert.equal(cancellations, readFileSync("netlify/database/migrations/0004_admin_cancellations.sql", "utf8"));
+  const linkResolution = readFileSync("db/005_payment_link_resolution.sql", "utf8");
+  await sql.exec(linkResolution);
+  await sql.exec(linkResolution);
+  assert.equal(linkResolution, readFileSync("netlify/database/migrations/0005_payment_link_resolution.sql", "utf8"));
+  const environments = readFileSync("db/006_payment_environment.sql", "utf8");
+  await sql.exec(environments); await sql.exec(environments);
+  assert.equal(environments, readFileSync("netlify/database/migrations/0006_payment_environment.sql", "utf8"));
+  assert.equal((await sql.query<{ payment_environment: string }>("SELECT payment_environment FROM reservations WHERE id=$1", [legacyId])).rows[0].payment_environment, "Test");
+  const nightlyPrices = readFileSync("db/007_nightly_prices.sql", "utf8");
+  await sql.exec(nightlyPrices); await sql.exec(nightlyPrices);
+  assert.equal(nightlyPrices, readFileSync("netlify/database/migrations/0007_nightly_prices.sql", "utf8"));
 
   let queue = Promise.resolve();
   let failBookingRead = false;
   let failSplitInsert = false;
+  let failPriceRead = false;
+  let failPriceWrite = false;
   const executedSql: string[] = [];
   let poolOptions: Record<string, unknown> = {};
   let idleErrorHandler: ((error: Error) => void) | undefined;
@@ -64,11 +79,19 @@ test("reservations, payments, iCal and private administration", async (t) => {
   }
   const query = async (text: string, args?: unknown[]) => {
     executedSql.push(text);
+    if (failPriceRead && text.includes("FROM nightly_prices")) {
+      failPriceRead = false;
+      throw new Error("Fixture private price database failure");
+    }
     if (failSplitInsert && /^INSERT INTO reservations/.test(text) && text.includes("parent_block_id")) {
       failSplitInsert = false;
       throw new Error("Fixture: could not preserve the remaining block");
     }
     const result = await sql.query(text, args);
+    if (failPriceWrite && text.includes("INSERT INTO nightly_prices")) {
+      failPriceWrite = false;
+      throw new Error("Fixture rate write failure after SQL");
+    }
     return { rows: result.rows, rowCount: result.affectedRows ?? result.rows.length };
   };
   class TestPool {
@@ -119,13 +142,15 @@ test("reservations, payments, iCal and private administration", async (t) => {
   let feedEvent = "";
   const domeFeedEvents = new Map<string, string>();
   let nextLinkId = 10;
-  type Link = { reference: string; amount: string; currency: string; order: string; approved: boolean };
+  type Link = { reference: string; amount: string; currency: string; order: string; approved: boolean; environment: string };
   const links = new Map<string, Link>();
   let paymentBody: Record<string, unknown> | null = null;
   let createdPayments = 0;
   let detailCalls = 0;
   let closedLinks = 0;
   let closeLinkFailure = false;
+  let closeFixture: "normal" | "numeric" | "status-zero" | "http" | "timeout" = "normal";
+  let linkTypeFixture: string | number | undefined;
   let loginCalls = 0;
   let authFixture: "success" | "http" | "missing_token" = "success";
   let linkFixture: "success" | "http" | "reject" | "bad_json" | "unsafe_url" |
@@ -180,7 +205,7 @@ test("reservations, payments, iCal and private administration", async (t) => {
       createdPayments++;
       const id = String(nextLinkId++);
       links.set(id, { reference: String(paymentBody!.reference), amount: String(paymentBody!.amount),
-        currency: String(paymentBody!.currency), order: `TPT${id}`, approved: false });
+        currency: String(paymentBody!.currency), order: `TPT${id}`, approved: false, environment: process.env.TILOPAY_EXPECTED_ENVIRONMENT! });
       return Response.json({ type: "200", url: linkFixture === "unsafe_url"
         ? `https://tilo.co.attacker.example/link/${id}` : `https://tilo.co/link/${id}`,
         ...(linkFixture === "missing_id" ? {} : { id: Number(id) }) });
@@ -190,7 +215,7 @@ test("reservations, payments, iCal and private administration", async (t) => {
       const id = url.split("/").at(-2)!;
       const link = links.get(id)!;
       return Response.json({ type: "200", detail: { id: Number(id), reference: detailFixture === "wrong_reference" ? "OTHER_REFERENCE" : link.reference,
-        amount: link.amount, currency: link.currency }, payments: link.approved ? [detailFixture === "legacy"
+        amount: link.amount, currency: link.currency, type: linkTypeFixture }, payments: link.approved ? [detailFixture === "legacy"
           ? { orderNumber: link.order }
           : { ...(detailFixture === "missing_id" ? {} : { id: 100_000 + Number(id) }),
             amount: link.amount, currency: link.currency, code: "1",
@@ -201,14 +226,14 @@ test("reservations, payments, iCal and private administration", async (t) => {
       transactionRequests.push(JSON.parse(String(init?.body)));
       const rows = [...links.entries()].filter(([, link]) => link.approved).map(([id, link]) => ({
         id: 100_000 + Number(id), orderNumber: link.order, amount: link.amount, currency: link.currency,
-        code: "1", capture: "Capture", environment: "Test", type: "Payment",
+        code: "1", capture: "Capture", environment: link.environment, type: "Payment",
       }));
       if (transactionFixture === "invalid_response") return Response.json({ type: "200", response: {} });
       const result = rows.map((row) => ({ ...row,
         ...(transactionFixture === "unrelated" ? { id: row.id + 900_000 } : {}),
         ...(transactionFixture === "wrong_amount" ? { amount: "9999.99" } : {}),
         ...(transactionFixture === "wrong_currency" ? { currency: "CRC" } : {}),
-        ...(transactionFixture === "wrong_environment" ? { environment: "Production" } : {}),
+        ...(transactionFixture === "wrong_environment" ? { environment: row.environment === "Test" ? "Production" : "Test" } : {}),
         ...(transactionFixture === "wrong_capture" ? { capture: "Authorize" } : {}),
       }));
       return Response.json({ type: "200", response: transactionFixture === "duplicate" ? [...result, ...result] : result });
@@ -220,9 +245,15 @@ test("reservations, payments, iCal and private administration", async (t) => {
       return Response.json({ type: "200", response: link?.approved ? [{ orderNumber: link.order,
         id_tilopay: 100_000 + Number(id) + (wrongConsultId ? 1 : 0),
         merchantId: "fixture-merchant",
-        amount: link.amount, currency: link.currency, code: "1", capture: "Capture", environment: "Test", type: "Payment" }] : [] });
+        amount: link.amount, currency: link.currency, code: "1", capture: "Capture", environment: link.environment, type: "Payment" }] : [] });
     }
-    if (url.endsWith("/deleteLinkPayment")) { closedLinks++; return Response.json({ type: closeLinkFailure ? "503" : "200" }); }
+    if (url.endsWith("/deleteLinkPayment")) {
+      closedLinks++;
+      if (closeFixture === "http") return new Response("Private provider error fixture-password", { status: 401 });
+      if (closeFixture === "timeout") throw new DOMException("Private provider URL", "TimeoutError");
+      return Response.json({ type: closeLinkFailure ? "503" : closeFixture === "numeric" ? 200 : "200",
+        status: closeFixture === "status-zero" ? 0 : 1, message: "Private provider error fixture-password" });
+    }
     throw new Error(`Unexpected network request in tests: ${new URL(url).hostname}`);
   };
 
@@ -668,7 +699,7 @@ test("reservations, payments, iCal and private administration", async (t) => {
     await t.test("professional guest and owner messages are separate, complete and escaped", async () => {
       const { bookingEmails } = await import("../src/lib/booking-email-content");
       const booking = (await db.getBooking(paidBookingId))!;
-      const content = bookingEmails({ ...booking, guest_name: '<script>alert("x")</script> & Guest' }, "Production", "https://fixture.netlify.app");
+      const content = bookingEmails({ ...booking, guest_name: '<script>alert("x")</script> & Guest' }, "https://fixture.netlify.app");
       assert(content.guest.subject.includes("Macas Moon Glampings"));
       assert(!content.guest.subject.includes("PRUEBA"));
       for (const message of [content.guest, content.owner]) {
@@ -929,6 +960,7 @@ test("reservations, payments, iCal and private administration", async (t) => {
       assert(html.includes('value="domo-romantico"')); assert(html.includes('value="domo-amplio"'));
       assert(html.includes("Ver calendario de")); assert(html.includes("Romántico")); assert(html.includes("Amplio"));
       assert(html.includes("Mostrar historial"));
+      assert(html.includes("Editar precios"));
       assert(!/\b(?:pruebas?|simulad[oa]s?|test)\b/i.test(html));
       assert(html.includes("https://fixture.netlify.app/api/calendar/domo-amplio/calendar.ics"));
       for (const environment of ["Test", "Production"]) {
@@ -951,8 +983,8 @@ test("reservations, payments, iCal and private administration", async (t) => {
     await t.test("commercial emails have no trial labels; simulated payments are never described as money charged", async () => {
       const { bookingEmails } = await import("../src/lib/booking-email-content");
       const booking = { ...(await db.getBooking(paidBookingId))!, guest_name: "María Castro" };
-      const production = bookingEmails(booking, "Production", "https://fixture.netlify.app");
-      const simulated = bookingEmails(booking, "Test", "https://fixture.netlify.app");
+      const production = bookingEmails({ ...booking, payment_environment: "Production" }, "https://fixture.netlify.app");
+      const simulated = bookingEmails({ ...booking, payment_environment: "Test" }, "https://fixture.netlify.app");
       for (const audience of ["guest", "owner"] as const) {
         const real = production[audience]; const demo = simulated[audience];
         assert(!/prueba|simulad|\btest\b/i.test(real.subject + real.text + real.html));
@@ -982,6 +1014,15 @@ test("reservations, payments, iCal and private administration", async (t) => {
       assert(validateBookingEnv(values, { production: true }).errors.length > 0);
       values.set("TILOPAY_EXPECTED_ENVIRONMENT", "Production");
       assert.deepEqual(validateBookingEnv(values, { production: true }).errors, []);
+      values.set("BOOKING_RECONCILE_ENABLED", "false");
+      assert(validateBookingEnv(values, { production: true }).errors.some((error: string) => error.includes("BOOKING_RECONCILE_ENABLED")));
+      values.set("BOOKING_RECONCILE_ENABLED", "true");
+      values.set("NEXT_PUBLIC_TURNSTILE_SITE_KEY", "1x00000000000000000000AA");
+      assert(validateBookingEnv(values).errors.some((error: string) => error.includes("demostración")));
+      values.set("NEXT_PUBLIC_TURNSTILE_SITE_KEY", "fixture");
+      values.set("TURNSTILE_SECRET_KEY", "1x0000000000000000000000000000000AA");
+      assert(validateBookingEnv(values).errors.some((error: string) => error.includes("demostración")));
+      values.set("TURNSTILE_SECRET_KEY", "fixture");
       values.set("BOOKING_ACTIVE_DOMES", "domo-romantico,domo-amplio");
       assert(validateBookingEnv(values).errors.some((error: string) => error.includes("ROMANTICO")));
       values.set("BOOKING_ACTIVE_DOMES", "domo-amplio");
@@ -1210,6 +1251,156 @@ test("reservations, payments, iCal and private administration", async (t) => {
       assert(!html.includes("Private Foreign Guest")); assert(!html.includes("guest@example.com"));
       assert(!html.includes('href="mailto:')); assert(!html.includes(">Liberar fechas<"));
     });
+    await t.test("a paid single-use cancellation is verified as consumed, not falsely closed or retried forever", async () => {
+      const { cancelLocalReservation } = await import("../src/lib/admin-cancellation");
+      const { GET: status } = await import("../src/app/api/reservations/[id]/route");
+      const created = await service.startReservation(payload("2032-01-01", "2032-01-02"), null, "https://fixture.netlify.app");
+      const pending = (await db.getBooking(created.id))!;
+      links.get(pending.payment_link_id!)!.approved = true;
+      await service.reconcilePayment(created.id);
+      const beforeClose = closedLinks, beforePayments = createdPayments, beforeEmails = emailCalls;
+      try {
+        linkTypeFixture = "Single use"; closeLinkFailure = true;
+        const result = await cancelLocalReservation(created.id, { dome: "domo-amplio", reason: "Anulación de reserva pagada", acknowledged: true, acknowledgeNoRefund: true }, "owner");
+        assert(!result.warning.includes("No se pudo cerrar"));
+        const row = (await db.getBooking(created.id))!;
+        assert.equal(row.status, "cancelled"); assert(row.payment_link_consumed_at);
+        assert.equal(row.payment_link_closed_at, null); assert.equal(row.payment_link_error, null);
+        assert.equal(row.amount_cents, pending.amount_cents); assert.equal(row.payment_reference, pending.payment_reference);
+        assert.equal(closedLinks, beforeClose); assert.equal(createdPayments, beforePayments); assert.equal(emailCalls, beforeEmails);
+        assert.equal((await sql.query("SELECT night FROM reservation_nights WHERE reservation_id=$1", [created.id])).rows.length, 0);
+        const beforeDetails = detailCalls;
+        await payments.closeInactivePaymentLink(row);
+        await payments.closeInactivePaymentLink({ ...row, payment_link_consumed_at: null }); // stale caller still cannot claim it
+        assert.equal(detailCalls, beforeDetails);
+        const view = await manual.adminCalendar("domo-amplio", "2032-01-01", "2032-02-01", false);
+        const visible = view.reservations.find(item => item.id === row.id)!;
+        assert.equal(visible.paymentLinkState, "consumed"); assert.equal(visible.paymentLinkPending, false);
+        const publicResult = await status(new Request("http://localhost"), { params: Promise.resolve({ id: row.id }) });
+        const publicBody = await publicResult.text();
+        for (const field of ["paymentLink", "payment_link", "diagnostic", "fixture-password"]) assert(!publicBody.includes(field));
+        assert(!((await exportIcs()).includes(createHash("sha256").update(row.id).digest("hex"))));
+      } finally { linkTypeFixture = undefined; closeLinkFailure = false; }
+    });
+    await t.test("unlimited or unknown links are never inferred consumed from a previously confirmed reservation", async () => {
+      const { cancelLocalReservation } = await import("../src/lib/admin-cancellation");
+      try {
+        for (const [index, type] of ["Unlimited", undefined].entries()) {
+          const created = await service.startReservation(payload(`2032-02-0${index + 1}`, `2032-02-0${index + 2}`), null, "https://fixture.netlify.app");
+          links.get((await db.getBooking(created.id))!.payment_link_id!)!.approved = true;
+          await service.reconcilePayment(created.id);
+          linkTypeFixture = type; closeFixture = "numeric";
+          const before = closedLinks;
+          await cancelLocalReservation(created.id, { dome: "domo-amplio", reason: "Anulación acordada", acknowledged: true, acknowledgeNoRefund: true }, "owner");
+          const row = (await db.getBooking(created.id))!;
+          assert(row.payment_link_closed_at); assert.equal(row.payment_link_consumed_at, null);
+          assert.equal(closedLinks, before + 1);
+        }
+      } finally { linkTypeFixture = undefined; closeFixture = "normal"; }
+    });
+    await t.test("closure errors persist safe diagnostics, respect cooldown and recover without reactivating nights", async () => {
+      const { cancelLocalReservation } = await import("../src/lib/admin-cancellation");
+      const originalLog = console.error; let logged = "";
+      console.error = (...args) => { logged += JSON.stringify(args); };
+      try {
+        for (const [index, mode] of (["reject", "status-zero", "http", "timeout"] as const).entries()) {
+          const created = await service.startReservation(payload(`2032-03-0${index + 1}`, `2032-03-0${index + 2}`), null, "https://fixture.netlify.app");
+          closeLinkFailure = mode === "reject"; closeFixture = mode === "reject" ? "normal" : mode;
+          await cancelLocalReservation(created.id, { dome: "domo-amplio", reason: "Corrección de solicitud", acknowledged: true, acknowledgeNoRefund: true }, "owner");
+          const row = (await db.getBooking(created.id))!;
+          assert.equal(row.status, "cancelled"); assert.equal(row.payment_link_closed_at, null); assert.equal(row.payment_link_consumed_at, null);
+          assert(row.payment_link_error); assert.equal(row.payment_link_error.stage, "tilopay_close");
+          assert.match(row.payment_link_error.reference, /^[a-f0-9-]{36}$/);
+          assert.equal(row.payment_link_error.reason, mode === "http" ? "http" : mode === "timeout" ? "timeout" : "rejected");
+          if (mode === "http") assert.equal(row.payment_link_error.upstreamStatus, 401);
+          if (mode === "reject") assert.equal(row.payment_link_error.providerCode, "503");
+          if (mode === "status-zero") assert.equal(row.payment_link_error.providerStatus, "0");
+          assert.equal((await sql.query("SELECT night FROM reservation_nights WHERE reservation_id=$1", [row.id])).rows.length, 0);
+          const before = closedLinks;
+          await payments.closeInactivePaymentLink(row);
+          assert.equal(closedLinks, before, "An immediate manual/worker retry must not duplicate the provider request.");
+          closeLinkFailure = false; closeFixture = "numeric";
+          await sql.query("UPDATE reservations SET payment_link_checked_at=now()-interval '3 minutes' WHERE id=$1", [row.id]);
+          await Promise.all([payments.closeInactivePaymentLink(row), payments.closeInactivePaymentLink(row)]);
+          assert.equal(closedLinks, before + 1, "Two serverless callers share an atomic claim.");
+          const recovered = (await db.getBooking(row.id))!;
+          assert.equal(recovered.status, "cancelled"); assert(recovered.payment_link_closed_at); assert.equal(recovered.payment_link_error, null);
+        }
+        for (const secret of ["fixture-password", "Private provider", "guest@example.com", "getDetailLinkPayment/"]) assert(!logged.includes(secret));
+        assert(logged.includes('"stage":"tilopay_close"')); assert(logged.includes('"providerCode":"503"'));
+      } finally { console.error = originalLog; closeLinkFailure = false; closeFixture = "normal"; }
+    });
+    await t.test("single-use consumption requires the matching captured payment, correct environment and exact link", async () => {
+      const { cancelLocalReservation } = await import("../src/lib/admin-cancellation");
+      const originalLog = console.error; console.error = () => {};
+      try {
+        for (const [index, failure] of ["wrong_environment", "wrong_capture", "unrelated", "wrong_reference"].entries()) {
+          const created = await service.startReservation(payload(`2032-04-0${index + 1}`, `2032-04-0${index + 2}`), null, "https://fixture.netlify.app");
+          links.get((await db.getBooking(created.id))!.payment_link_id!)!.approved = true;
+          await service.reconcilePayment(created.id);
+          linkTypeFixture = 1; closeLinkFailure = true;
+          if (failure === "wrong_reference") detailFixture = "wrong_reference";
+          else transactionFixture = failure as typeof transactionFixture;
+          await cancelLocalReservation(created.id, { dome: "domo-amplio", reason: "Revisión del pago", acknowledged: true, acknowledgeNoRefund: true }, "owner");
+          const row = (await db.getBooking(created.id))!;
+          assert.equal(row.status, "cancelled"); assert.equal(row.payment_link_consumed_at, null); assert.equal(row.payment_link_closed_at, null);
+          assert(row.payment_link_error);
+          detailFixture = "live"; transactionFixture = "success"; closeLinkFailure = false; linkTypeFixture = undefined;
+        }
+      } finally { console.error = originalLog; linkTypeFixture = undefined; closeLinkFailure = false; detailFixture = "live"; transactionFixture = "success"; }
+    });
+    await t.test("admin can inspect/retry an inactive link with authentication, dome isolation and safe failures", async () => {
+      const api = await import("../src/app/api/admin/reservations/[id]/route");
+      const { cancelLocalReservation } = await import("../src/lib/admin-cancellation");
+      const created = await service.startReservation(payload("2032-05-01", "2032-05-02"), null, "https://fixture.netlify.app");
+      const context = { params: Promise.resolve({ id: created.id }) };
+      const request = (dome = "domo-amplio", origin = "http://localhost") => new Request("http://localhost/api/admin/reservations/" + created.id, {
+        method: "POST", headers: { origin, "Content-Type": "application/json" }, body: JSON.stringify({ action: "retry-payment-link", dome }),
+      });
+      cookieValues.clear();
+      assert.equal((await api.POST(request(), context)).status, 401);
+      assert.equal((await api.POST(request("domo-amplio", "https://attacker.example"), context)).status, 403);
+      const token = await auth.loginAdmin("owner", "A-private-test-password!", new Request("http://localhost"));
+      cookieValues.set(auth.ADMIN_COOKIE, token);
+      const originalLog = console.error; console.error = () => {};
+      try {
+        assert.equal((await api.POST(request("domo-romantico"), context)).status, 404);
+        assert.equal((await api.POST(request(), context)).status, 409);
+        closeLinkFailure = true;
+        await cancelLocalReservation(created.id, { dome: "domo-amplio", reason: "Anulación de solicitud", acknowledged: true, acknowledgeNoRefund: true }, "owner");
+        const before = closedLinks;
+        assert.equal((await api.POST(request(), context)).status, 200);
+        assert.equal(closedLinks, before);
+        await sql.query("UPDATE reservations SET payment_link_checked_at=now()-interval '3 minutes' WHERE id=$1", [created.id]);
+        const failure = await api.POST(request(), context);
+        assert.equal(failure.status, 502); assert.match(failure.headers.get("cache-control")!, /private.*no-store/);
+        assert(!((await failure.text()).includes("fixture-password")));
+        const calendar = await manual.adminCalendar("domo-amplio", "2032-05-01", "2032-06-01", false);
+        const item = calendar.reservations.find(row => row.id === created.id)!;
+        assert.equal(item.paymentLinkState, "pending"); assert(item.paymentLinkDiagnostic?.reference); assert(item.paymentLinkPending);
+        closeLinkFailure = false;
+        await sql.query("UPDATE reservations SET payment_link_checked_at=now()-interval '3 minutes' WHERE id=$1", [created.id]);
+        const success = await api.POST(request(), context);
+        assert.equal(success.status, 200); assert((await success.json()).warning.includes("Enlace cerrado"));
+        assert.equal((await db.getBooking(created.id))!.status, "cancelled");
+      } finally { console.error = originalLog; closeLinkFailure = false; await auth.logoutAdmin(); cookieValues.clear(); }
+    });
+    await t.test("owner messages distinguish consumed, closed and uncertain links without inventing payment/refund state", async () => {
+      const { createElement } = await import("react");
+      const { renderToStaticMarkup } = await import("react-dom/server");
+      const { AdminPaymentLinkStatus } = await import("../src/components/admin/AdminPaymentLinkStatus");
+      const render = (state: AdminReservation["paymentLinkState"]) => renderToStaticMarkup(createElement(AdminPaymentLinkStatus, {
+        row: adminReservationFixture({ status: "cancelled", paymentLinkState: state, paymentLinkDiagnostic: state === "pending"
+          ? { stage: "tilopay_close", reason: "rejected", providerCode: "503", reference: "00000000-0000-4000-8000-000000000009" } : null }),
+      }));
+      assert.equal(render(null), "");
+      assert(render("consumed").includes("pago verificado y uso consumido"));
+      assert(!render("consumed").includes("pendiente"));
+      assert(render("closed").includes("Enlace de pago cerrado"));
+      assert(render("pending").includes("no demuestra que el enlace permita otro pago"));
+      assert(render("pending").includes("Código Tilopay: 503")); assert(render("pending").includes("Información para soporte"));
+      assert(!render("pending").includes("guest@example.com"));
+    });
     await t.test("database connections are bounded and idle errors never expose private driver messages", async () => {
       assert.equal(poolOptions.max, 3);
       assert.equal(poolOptions.connectionTimeoutMillis, 10_000);
@@ -1230,7 +1421,7 @@ test("reservations, payments, iCal and private administration", async (t) => {
       const before = executedSql.length;
       const calendar = await manual.adminCalendar("domo-amplio", "2029-09-01", "2029-10-01", false);
       const statements = executedSql.slice(before);
-      assert.equal(statements.length, 2);
+      assert.equal(statements.length, 3);
       assert(statements.every((statement) => /^SELECT\s/.test(statement)));
       assert.equal(calendar.reservations.find((row) => row.id === original.id)!.status, "expired");
       assert.equal((await db.getBooking(original.id))!.status, "pending", "Viewing must not write back expired states.");
@@ -1238,6 +1429,129 @@ test("reservations, payments, iCal and private administration", async (t) => {
       assert.equal((await db.getBooking(original.id))!.status, "expired");
       const nights = await sql.query<{ reservation_id: string }>("SELECT reservation_id FROM reservation_nights WHERE night='2029-09-01' AND dome='domo-amplio'");
       assert.deepEqual(nights.rows.map((row) => row.reservation_id), [replacement.id]);
+    });
+    await t.test("owner-set prices parse exact cents and reject invalid dates or unsafe amounts", async () => {
+      const { parseNightPrice, validatePriceRange } = await import("../src/lib/nightly-pricing");
+      for (const [value, cents] of [["170", 17000], ["200,25", 20025], ["0.01", 1], [" 125.5 ", 12550]] as const) {
+        assert.equal(parseNightPrice(value), cents);
+      }
+      for (const value of [0, 170, "0", "-1", "1.001", "NaN", "Infinity", "1e2", "1000000.01", "<script>"]) {
+        assert.throws(() => parseNightPrice(value), { status: 400 });
+      }
+      for (const [start, end] of [["2034-02-30", "2034-03-01"], ["2034-01-01", "2034-01-01"], ["2034-01-02", "2034-01-01"], ["2034-01-01", "2035-01-02"]]) {
+        assert.throws(() => validatePriceRange(start, end, 365), { status: 400 });
+      }
+    });
+    await t.test("bulk pricing saves an entire range atomically, isolates domes and restores only selected nights", async () => {
+      const { changeNightPrices, adminPrices } = await import("../src/lib/admin-pricing");
+      const oldRomantic = process.env.PRICE_DOMO_ROMANTICO_CENTS;
+      process.env.PRICE_DOMO_ROMANTICO_CENTS = "17000";
+      const span = { dome: "domo-amplio", start: "2034-01-01", end: "2035-01-01", price: "200.25" };
+      try {
+        await changeNightPrices(span, "fixture-owner");
+        const count = await sql.query<{ count: number }>("SELECT count(*)::int AS count FROM nightly_prices WHERE dome='domo-amplio'");
+        assert.equal(count.rows[0].count, 365);
+        const first = (await adminPrices("domo-amplio", "2033-12-31", "2034-01-03"))!;
+        assert.deepEqual(first.nights.map((night) => night.amountCents), [12500, 20025, 20025]);
+        const last = (await adminPrices("domo-amplio", "2034-12-31", "2035-01-02"))!;
+        assert.deepEqual(last.nights.map((night) => night.amountCents), [20025, 12500]);
+        assert.equal((await adminPrices("domo-romantico", "2034-01-01", "2034-01-03"))!.amountCents, 34000);
+        await changeNightPrices({ ...span, start: "2034-01-02", end: "2034-01-04", price: "250" }, "fixture-owner");
+        await changeNightPrices({ ...span, start: "2034-01-03", end: "2034-01-04" }, "fixture-owner", true);
+        const mixed = (await adminPrices("domo-amplio", "2034-01-01", "2034-01-05"))!;
+        assert.deepEqual(mixed.nights.map((night) => night.amountCents), [20025, 25000, 12500, 20025]);
+        assert.deepEqual(mixed.nights.map((night) => night.special), [true, true, false, true]);
+        const before = mixed.amountCents;
+        failPriceWrite = true;
+        await assert.rejects(changeNightPrices({ ...span, end: "2034-01-05", price: "300" }, "fixture-owner"));
+        assert.equal((await adminPrices("domo-amplio", "2034-01-01", "2034-01-05"))!.amountCents, before, "A failed bulk save must roll back every night.");
+        await assert.rejects(changeNightPrices({ ...span, start: "2020-01-01", end: "2020-01-02" }, "fixture-owner"), { status: 400 });
+        await assert.rejects(changeNightPrices({ ...span, dome: "unknown" }, "fixture-owner"), { status: 400 });
+      } finally {
+        await sql.exec("DELETE FROM nightly_prices");
+        if (oldRomantic === undefined) delete process.env.PRICE_DOMO_ROMANTICO_CENTS; else process.env.PRICE_DOMO_ROMANTICO_CENTS = oldRomantic;
+      }
+    });
+    await t.test("public night prices contain only prices, sum exact chosen nights and fail closed on storage failure", async () => {
+      const prices = await import("../src/lib/admin-pricing");
+      const api = await import("../src/app/api/pricing/[dome]/route");
+      const query = (start: string, end: string, dome = "domo-amplio") => api.GET(
+        new Request(`http://localhost/api/pricing/${dome}?${new URLSearchParams({ start, end })}`), { params: Promise.resolve({ dome }) });
+      try {
+        await prices.changeNightPrices({ dome: "domo-amplio", start: "2034-02-01", end: "2034-02-03", price: "200.25" }, "private-owner");
+        const response = await query("2034-02-01", "2034-02-04");
+        assert.equal(response.status, 200); assert.match(response.headers.get("cache-control")!, /no-store/);
+        const quote = await response.json();
+        assert.equal(quote.amountCents, 20025 + 20025 + 12500);
+        assert.deepEqual(quote.nights.map((night: { date: string }) => night.date), ["2034-02-01", "2034-02-02", "2034-02-03"]);
+        assert(!JSON.stringify(quote).includes("private-owner")); assert(!JSON.stringify(quote).includes("updated"));
+        assert(!JSON.stringify(quote).includes("guest"));
+        assert.equal((await query("2034-02-30", "2034-03-01")).status, 400);
+        assert.equal((await query("2034-01-01", "2035-01-01")).status, 400);
+        assert.equal((await query("2034-02-01", "2034-02-02", "unknown")).status, 404);
+        const oldLog = console.error; let log = "";
+        console.error = (...args) => { log += JSON.stringify(args); };
+        try {
+          failPriceRead = true;
+          const failed = await query("2034-02-01", "2034-02-02");
+          assert.equal(failed.status, 503); assert(!(await failed.text()).includes("Fixture private"));
+          assert(!log.includes("Fixture private"));
+        } finally { console.error = oldLog; }
+      } finally { await sql.exec("DELETE FROM nightly_prices"); }
+    });
+    await t.test("bulk price endpoints require admin and same origin; authenticated save and restore work", async () => {
+      const api = await import("../src/app/api/admin/prices/route");
+      const request = (origin = "http://localhost", body: unknown = { dome: "domo-amplio", start: "2034-03-01", end: "2034-03-04", price: "195" }) =>
+        new Request("http://localhost/api/admin/prices", { method: "PUT", headers: { origin, "content-type": "application/json" }, body: JSON.stringify(body) });
+      cookieValues.clear();
+      for (const handler of [api.PUT, api.DELETE]) {
+        assert.equal((await handler(request())).status, 401);
+        assert.equal((await handler(request("https://attacker.invalid"))).status, 403);
+      }
+      await sql.exec("DELETE FROM admin_login_limits");
+      const token = await auth.loginAdmin("owner", "A-private-test-password!", new Request("http://localhost"));
+      cookieValues.set(auth.ADMIN_COOKIE, token);
+      try {
+        const saved = await api.PUT(request()); assert.equal(saved.status, 200);
+        assert.match(saved.headers.get("cache-control")!, /private, no-store/);
+        assert.equal((await sql.query("SELECT night FROM nightly_prices WHERE dome='domo-amplio'")).rows.length, 3);
+        assert.equal((await api.PUT(request("http://localhost", { dome: "domo-amplio", start: "2034-03-01", end: "2034-03-04", price: "0" }))).status, 400);
+        assert.equal((await api.DELETE(request())).status, 200);
+        assert.equal((await sql.query("SELECT night FROM nightly_prices")).rows.length, 0);
+      } finally { await auth.logoutAdmin(); cookieValues.clear(); await sql.exec("DELETE FROM nightly_prices"); }
+    });
+    await t.test("checkout enforces owner-set rates under lock and freezes existing payment amounts and nightly breakdown", async () => {
+      const { changeNightPrices } = await import("../src/lib/admin-pricing");
+      const data = payload("2034-04-01", "2034-04-04");
+      try {
+        await changeNightPrices({ dome: "domo-amplio", start: "2034-04-01", end: "2034-04-03", price: "210.25" }, "owner");
+        const before = createdPayments;
+        await assert.rejects(service.startReservation(data, null, "https://fixture.netlify.app"), { status: 409 });
+        assert.equal(createdPayments, before);
+        assert.equal((await sql.query("SELECT id FROM reservations WHERE check_in='2034-04-01'")).rows.length, 0);
+        const amount = 21025 + 21025 + 12500;
+        failPriceRead = true;
+        await assert.rejects(service.startReservation({ ...data, expectedAmountCents: amount }, null, "https://fixture.netlify.app"));
+        assert.equal(createdPayments, before, "Unknown prices must never open a payment.");
+        assert.equal((await sql.query("SELECT id FROM reservations WHERE check_in='2034-04-01'")).rows.length, 0);
+        const statementsStart = executedSql.length;
+        const result = await service.startReservation({ ...data, expectedAmountCents: amount }, null, "https://fixture.netlify.app");
+        assert.equal(result.amountCents, amount); assert.equal(paymentBody!.amount, "545.50");
+        const statements = executedSql.slice(statementsStart);
+        const lock = statements.findIndex((statement) => statement.includes("rate_calendars") && statement.includes("FOR UPDATE"));
+        const read = statements.findIndex((statement) => statement.includes("FROM nightly_prices"));
+        const insert = statements.findIndex((statement) => statement.startsWith("INSERT INTO reservations"));
+        assert(lock > 0 && read > lock && insert > read);
+        const snapshot = (await sql.query<{ nightly_prices: unknown[] }>("SELECT nightly_prices FROM reservations WHERE id=$1", [result.id])).rows[0].nightly_prices;
+        assert.equal(snapshot.length, 3);
+        await changeNightPrices({ dome: "domo-amplio", start: "2034-04-01", end: "2034-04-04", price: "300" }, "owner");
+        const booking = (await db.getBooking(result.id))!;
+        assert.equal(booking.amount_cents, amount);
+        links.get(booking.payment_link_id!)!.approved = true;
+        assert.equal((await service.reconcilePayment(result.id)).status, "confirmed");
+        assert.equal((await db.getBooking(result.id))!.amount_cents, amount);
+        assert.deepEqual((await sql.query<{ nightly_prices: unknown[] }>("SELECT nightly_prices FROM reservations WHERE id=$1", [result.id])).rows[0].nightly_prices, snapshot);
+      } finally { await sql.exec("DELETE FROM nightly_prices"); }
     });
     await t.test("scheduled retries retain safety, skip recorded payment incidents and independently close expired links", async () => {
       // This is the disposable fixture database. Isolate the worker from all
@@ -1296,6 +1610,7 @@ test("reservations, payments, iCal and private administration", async (t) => {
         assert.equal(detailCalls, beforeDetails);
         assert.equal((await db.getBooking(incident.id))!.payment_link_closed_at, null);
         closeLinkFailure = false;
+        await sql.query("UPDATE reservations SET payment_link_checked_at = now() - interval '3 minutes' WHERE id = $1", [incident.id]);
         assert.equal((await run()).failures, 0);
         assert.equal(detailCalls, beforeDetails);
         assert.equal(closedLinks, beforeClose + 2);
@@ -1328,6 +1643,7 @@ test("reservations, payments, iCal and private administration", async (t) => {
         assert.equal(cancelledRow.status, "cancelled"); assert.equal(cancelledRow.payment_link_closed_at, null);
         links.get(cancelledRow.payment_link_id!)!.approved = true;
         closeLinkFailure = false;
+        await sql.query("UPDATE reservations SET payment_link_checked_at = now() - interval '3 minutes' WHERE id = $1", [cancelled.id]);
         await run();
         const lateCancelled = (await db.getBooking(cancelled.id))!;
         assert.equal(lateCancelled.status, "cancelled");
@@ -1340,18 +1656,141 @@ test("reservations, payments, iCal and private administration", async (t) => {
         closeLinkFailure = true;
         await cancelLocalReservation(confirmedCancellation.id, { dome: "domo-amplio", reason: "Cancelación acordada con el huésped", acknowledged: true, acknowledgeNoRefund: true }, "owner");
         closeLinkFailure = false;
+        await sql.query("UPDATE reservations SET payment_link_checked_at = now() - interval '3 minutes' WHERE id = $1", [confirmedCancellation.id]);
         const beforeKnownChecks = detailCalls;
         await run();
         const knownCancelled = (await db.getBooking(confirmedCancellation.id))!;
         assert.equal(knownCancelled.status, "cancelled"); assert.equal(knownCancelled.payment_issue, null);
-        assert(knownCancelled.payment_link_closed_at); assert.equal(detailCalls, beforeKnownChecks);
+        assert(knownCancelled.payment_link_closed_at); assert.equal(detailCalls, beforeKnownChecks + 1);
         assert.equal((await run()).checked, 0);
+        const consumedCancellation = await service.startReservation(payload("2030-05-05", "2030-05-06"), null, "https://fixture.netlify.app");
+        links.get((await db.getBooking(consumedCancellation.id))!.payment_link_id!)!.approved = true;
+        await service.reconcilePayment(consumedCancellation.id);
+        linkTypeFixture = "Single use";
+        await cancelLocalReservation(consumedCancellation.id, { dome: "domo-amplio", reason: "Cancelación de enlace consumido", acknowledged: true, acknowledgeNoRefund: true }, "owner");
+        assert((await db.getBooking(consumedCancellation.id))!.payment_link_consumed_at);
+        const consumedDetails = detailCalls;
+        assert.equal((await run()).checked, 0); assert.equal(detailCalls, consumedDetails);
+        linkTypeFixture = undefined;
         assert(readFileSync("netlify/functions/reconcile-reservations.mts", "utf8").includes('schedule: "*/15 * * * *"'));
       } finally {
-        console.error = originalLog; smtpFailedAudience = null; closeLinkFailure = false;
+        console.error = originalLog; smtpFailedAudience = null; closeLinkFailure = false; linkTypeFixture = undefined;
         for (const [key, value] of [["BOOKING_RECONCILE_ENABLED", savedEnabled], ["BOOKING_RECONCILE_SECRET", savedSecret]]) {
           if (value === undefined) delete process.env[key!]; else process.env[key!] = value;
         }
+      }
+    });
+    await t.test("scheduled function exposes safe failure summaries without leaking provider data", async () => {
+      const { default: run } = await import("../netlify/functions/reconcile-reservations.mjs");
+      const savedFetch = globalThis.fetch, savedWarn = console.warn;
+      const savedEnabled = process.env.BOOKING_RECONCILE_ENABLED;
+      const savedSecret = process.env.BOOKING_RECONCILE_SECRET;
+      let mode = "failures", warnings = "";
+      globalThis.fetch = async (_url, init) => {
+        assert.equal(init?.method, "POST");
+        if (mode === "disabled") return new Response(null, { status: 204 });
+        if (mode === "http") return new Response(null, { status: 503 });
+        return Response.json(mode === "invalid" ? {} : { failures: mode === "failures" ? 2 : 0, private: "fixture-password" });
+      };
+      console.warn = (...args) => { warnings += JSON.stringify(args); };
+      try {
+        process.env.BOOKING_RECONCILE_ENABLED = "true";
+        process.env.BOOKING_RECONCILE_SECRET = "private-fixture-worker-only";
+        assert.equal((await run()).status, 204);
+        assert(warnings.includes('"failures":2')); assert(!warnings.includes("fixture-password"));
+        assert(!warnings.includes(process.env.BOOKING_RECONCILE_SECRET));
+        mode = "http"; await assert.rejects(run(), /HTTP 503/);
+        mode = "invalid"; await assert.rejects(run(), /Invalid booking reconciliation report/);
+        mode = "disabled"; assert.equal((await run()).status, 204);
+      } finally {
+        globalThis.fetch = savedFetch; console.warn = savedWarn;
+        if (savedEnabled === undefined) delete process.env.BOOKING_RECONCILE_ENABLED; else process.env.BOOKING_RECONCILE_ENABLED = savedEnabled;
+        if (savedSecret === undefined) delete process.env.BOOKING_RECONCILE_SECRET; else process.env.BOOKING_RECONCILE_SECRET = savedSecret;
+      }
+    });
+    await t.test("switching to Production preserves Test history and never queries its links with the new environment", async () => {
+      // Disposable database/providers only. No real commerce mode is changed.
+      await sql.exec("TRUNCATE reservations CASCADE");
+      const publicApi = await import("../src/app/api/reservations/[id]/route");
+      const adminApi = await import("../src/app/api/admin/reservations/[id]/route");
+      const worker = await import("../src/app/api/internal/reconcile/route");
+      const { bookingEmails } = await import("../src/lib/booking-email-content");
+      const { sendConfirmation } = await import("../src/lib/booking-email");
+      const { cancelLocalReservation } = await import("../src/lib/admin-cancellation");
+      const demo = await service.startReservation(payload("2033-01-01", "2033-01-02"), null, "https://fixture.netlify.app");
+      links.get((await db.getBooking(demo.id))!.payment_link_id!)!.approved = true;
+      await service.reconcilePayment(demo.id);
+      const pending = await service.startReservation(payload("2033-01-03", "2033-01-04"), null, "https://fixture.netlify.app");
+      const cancelled = await service.startReservation(payload("2033-01-05", "2033-01-06"), null, "https://fixture.netlify.app");
+      closeLinkFailure = true;
+      const savedLog = console.error; console.error = () => {};
+      try { await cancelLocalReservation(cancelled.id, { dome: "domo-amplio", reason: "Cancelación previa al cambio", acknowledged: true, acknowledgeNoRefund: true }, "owner"); }
+      finally { closeLinkFailure = false; console.error = savedLog; }
+      const oldSettings = { environment: process.env.TILOPAY_EXPECTED_ENVIRONMENT,
+        enabled: process.env.BOOKING_RECONCILE_ENABLED, secret: process.env.BOOKING_RECONCILE_SECRET };
+      const savedNextLinkId = nextLinkId;
+      const oldPaidLinkId = (await db.getBooking(demo.id))!.payment_link_id!;
+      const oldPaidLink = links.get(oldPaidLinkId)!;
+      const token = await auth.loginAdmin("owner", "A-private-test-password!", new Request("http://localhost"));
+      cookieValues.set(auth.ADMIN_COOKIE, token);
+      try {
+        process.env.TILOPAY_EXPECTED_ENVIRONMENT = "Production";
+        const oldPaid = (await db.getBooking(demo.id))!;
+        assert.equal(oldPaid.payment_environment, "Test");
+        assert(bookingEmails(oldPaid, "https://fixture.netlify.app").guest.text.includes("sin cargo real"));
+        const publicResult = await publicApi.GET(new Request("http://localhost"), { params: Promise.resolve({ id: demo.id }) });
+        assert.equal((await publicResult.json()).simulatedPayment, true);
+        const beforeDetails = detailCalls, beforeLogins = loginCalls, beforeClose = closedLinks;
+        await assert.rejects(service.reconcilePayment(pending.id), { reason: "environment_mismatch" });
+        await assert.rejects(payments.closeInactivePaymentLink((await db.getBooking(cancelled.id))!), { reason: "environment_mismatch" });
+        const request = new Request("http://localhost/api/admin/reservations/" + cancelled.id, { method: "POST",
+          headers: { origin: "http://localhost", "Content-Type": "application/json" }, body: JSON.stringify({ action: "retry-payment-link", dome: "domo-amplio" }) });
+        assert.equal((await adminApi.POST(request, { params: Promise.resolve({ id: cancelled.id }) })).status, 409);
+        process.env.BOOKING_RECONCILE_ENABLED = "true";
+        process.env.BOOKING_RECONCILE_SECRET = "fixture-new-environment-worker-secret";
+        await sql.query("UPDATE reservations SET confirmation_email_sent_at=NULL, owner_notification_sent_at=NULL WHERE id=$1", [demo.id]);
+        const beforeMail = emailCalls;
+        const run = await worker.POST(new Request("http://localhost/api/internal/reconcile", { method: "POST",
+          headers: { "x-reconcile-secret": process.env.BOOKING_RECONCILE_SECRET } }));
+        assert.deepEqual(await run.json(), { checked: 0, emailRetries: 0, failures: 0 });
+        assert.equal(emailCalls, beforeMail); assert.equal(detailCalls, beforeDetails);
+        assert.equal(loginCalls, beforeLogins); assert.equal(closedLinks, beforeClose);
+        // An intentional resend retains the reservation's historical Test wording.
+        await sendConfirmation((await db.getBooking(demo.id))!);
+        assert(String(lastEmail!.text).includes("sin cargo real"));
+
+        nextLinkId = Number(oldPaidLinkId); // Provider namespaces can reuse a numeric ID across environments.
+        const real = await service.startReservation(payload("2033-02-01", "2033-02-02"), null, "https://fixture.netlify.app");
+        const realPending = (await db.getBooking(real.id))!;
+        assert.equal(realPending.payment_environment, "Production");
+        assert.equal(realPending.payment_link_id, oldPaidLinkId);
+        links.get(realPending.payment_link_id!)!.approved = true;
+        const webhook = await import("../src/app/api/reservations/webhook/route");
+        const notified = await webhook.POST(new Request("http://localhost/api/reservations/webhook", { method: "POST",
+          headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tilopayLinkId: realPending.payment_link_id, code: "1" }) }));
+        assert.equal(notified.status, 200);
+        assert.equal((await db.getBooking(real.id))!.status, "confirmed");
+        assert.equal((await db.getBooking(demo.id))!.payment_environment, "Test");
+        assert((transactionRequests.at(-1)!).environment === 0);
+        const realBooking = (await db.getBooking(real.id))!;
+        assert(bookingEmails(realBooking, "https://fixture.netlify.app").guest.text.includes("Total pagado"));
+        assert(!bookingEmails(realBooking, "https://fixture.netlify.app").guest.text.includes("sin cargo real"));
+        const realResult = await publicApi.GET(new Request("http://localhost"), { params: Promise.resolve({ id: real.id }) });
+        assert.equal((await realResult.json()).simulatedPayment, false);
+        // A later return to Test must not relabel or consult the real transaction either.
+        process.env.TILOPAY_EXPECTED_ENVIRONMENT = "Test";
+        const preserved = await publicApi.GET(new Request("http://localhost"), { params: Promise.resolve({ id: real.id }) });
+        assert.equal((await preserved.json()).simulatedPayment, false);
+        const oldView = await manual.adminCalendar("domo-amplio", "2033-01-01", "2033-02-01", false);
+        assert(oldView.reservations.every(row => row.paymentEnvironment === "Test"));
+        const liveView = await manual.adminCalendar("domo-amplio", "2033-02-01", "2033-03-01", false);
+        assert.equal(liveView.reservations.find(row => row.id === real.id)!.paymentEnvironment, "Production");
+      } finally {
+        nextLinkId = savedNextLinkId; links.set(oldPaidLinkId, oldPaidLink);
+        for (const [key, value] of [["TILOPAY_EXPECTED_ENVIRONMENT", oldSettings.environment], ["BOOKING_RECONCILE_ENABLED", oldSettings.enabled], ["BOOKING_RECONCILE_SECRET", oldSettings.secret]]) {
+          if (value === undefined) delete process.env[key!]; else process.env[key!] = value;
+        }
+        await auth.logoutAdmin(); cookieValues.clear();
       }
     });
     await t.test("login rate limit is persisted in PostgreSQL", async () => {

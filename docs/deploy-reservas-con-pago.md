@@ -1,9 +1,8 @@
 # Primer deploy de pruebas: Gmail + Tilopay
 
 > **Configuración actual:** ambos domos a US$170 por noche y Tilopay aún en Test.
-> Sigue [Reservas de ambos domos](configuracion-dos-domos.md) para el próximo deploy,
-> los enlaces del romántico y el selector del administrador. Las referencias a
-> US$0,01 y a un solo domo en esta guía corresponden a la configuración anterior.
+> Para el próximo deploy usa la [lista corta del deploy casi final](deploy-casi-final.md).
+> Las menciones a US$0,01 en los diagnósticos son históricas, no la tarifa vigente.
 
 Usa solo el proyecto **macasmoon-reservas-testing**, nunca el sitio de macasmoon.com.
 La configuración actual usa **US$170 por noche en ambos domos**, pago obligatorio y
@@ -172,7 +171,7 @@ El pago completo necesita el retorno público y avisos de Tilopay: pruébalo en 
    .env.netlify nunca va en un commit. Git no incluye archivos locales sin commit.
    El [procedimiento CLI alternativo](pruebas-netlify-ical.md) permite desplegar archivos locales;
    conserva los indicadores de pago de esta guía, no los del modo gratuito.
-8. El deploy debe aplicar las migraciones de netlify/database/migrations: 0001, 0002 y 0003.
+8. El deploy debe aplicar las migraciones pendientes de `netlify/database/migrations`, en orden: 0001 a 0007. La 0004 permite anular reservas; la 0005 gestiona enlaces y diagnósticos; la 0006 conserva el entorno de cada pago al pasar de Test a Producción; la 0007 permite ajustar precios por fecha desde el administrador. Las operaciones históricas de este proyecto son de Test. Si ya aplicaste las anteriores, no hace falta repetirlas. Consulta [la lista corta del deploy](deploy-casi-final.md).
    Solo se aplican las pendientes. La tercera registra por separado el aviso de los dueños.
    No borres tablas ni datos.
 9. Abre /admin e inicia sesión. No deben aparecer avisos de configuración pendiente.
@@ -192,7 +191,7 @@ TILOPAY_CHECKOUT_ENABLED=true y NEXT_PUBLIC_BOOKING_TEST_MODE=false.
    Si los anuncios importan el feed de pruebas, la reserva bloqueará noches reales allí.
 3. Escribe nombre, correo receptor, teléfono, país y huéspedes; completa la verificación.
 4. Pulsa **Continuar al pago seguro**. Debe abrir una página HTTPS de Tilopay.
-   Una noche cuesta USD 0,01. Si el comercio rechaza ese mínimo, no aumentes el precio sin decidirlo.
+   Una noche cuesta **USD 170** en cualquiera de los dos domos. El modo Test del comercio evita un cargo real; no reduzcas la tarifa para esta prueba.
 5. En Tilopay utiliza una de estas **tarjetas ficticias oficiales**:
 
    | Resultado | Número |
@@ -206,8 +205,8 @@ TILOPAY_CHECKOUT_ENABLED=true y NEXT_PUBLIC_BOOKING_TEST_MODE=false.
    [Tarjetas y reglas oficiales](https://tilopay.com/developers/tarjetas-de-prueba).
 6. Completa el pago y guarda la URL/ID de reserva al volver. Debe pasar a **Confirmada**
    después de la comprobación del servidor, no por mostrar un mensaje en Tilopay.
-7. Revisa el correo receptor (también spam), el aviso en el Gmail de los dueños, /admin y el iCal del amplio.
-   El mensaje dirá **PRUEBA**: no acredita un cobro real. Del 10 al 11 se bloquea solo la noche del 10.
+7. Revisa el correo receptor (también spam), el aviso en el Gmail de los dueños, /admin y el iCal del domo elegido.
+   El asunto es comercial; el detalle indica **sin cargo real** para esta operación Test. Del 10 al 11 se bloquea solo la noche del 10. Repite la comprobación para el otro domo.
 8. Prueba rechazo y abandono en **otras fechas libres**. No deben confirmarse ni exportarse.
    El bloqueo pendiente es solo local y vence a los 30 minutos. No necesitas otro deploy.
 

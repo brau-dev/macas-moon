@@ -14,12 +14,14 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
   try {
     const booking = await getBooking(id);
     if (!booking) return NextResponse.json({ error: "Reserva no encontrada" }, { status: 404 });
-    const current = booking.status === "pending" && booking.payment_provider === "tilopay"
+    const current = booking.status === "pending" && booking.payment_provider === "tilopay" &&
+      booking.payment_environment === process.env.TILOPAY_EXPECTED_ENVIRONMENT
       ? await reconcilePayment(id) : booking;
-    return NextResponse.json({ id, status: current.status, dome: current.dome,
+    const status = current.status === "pending" && current.expires_at && current.expires_at.valueOf() <= Date.now() ? "expired" : current.status;
+    return NextResponse.json({ id, status, dome: current.dome,
       checkIn: current.check_in, checkOut: current.check_out, amountCents: current.amount_cents,
       currency: current.currency, testMode: current.payment_provider === "test",
-      simulatedPayment: current.payment_provider === "test" || process.env.TILOPAY_EXPECTED_ENVIRONMENT === "Test",
+      simulatedPayment: current.payment_provider === "test" || current.payment_environment !== "Production",
       emailSent: Boolean(current.confirmation_email_sent_at) },
     { headers: { "Cache-Control": "no-store" } });
   } catch (error) {

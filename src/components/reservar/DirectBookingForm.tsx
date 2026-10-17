@@ -13,6 +13,7 @@ import { useLanguage } from "@/i18n/LanguageProvider";
 import { residenceCountries } from "@/lib/countries";
 import { trustedTilopayPaymentUrl } from "@/lib/tilopay-payment-url";
 import { resolveBookingDome } from "@/lib/booking-selection";
+import { useNightlyPricing } from "@/components/reservar/useNightlyPricing";
 
 type Pricing = { currency: string; perNight: Record<string, number> };
 
@@ -38,6 +39,7 @@ export function DirectBookingForm({ initialDome }: { initialDome?: string }) {
   const [testSecret, setTestSecret] = useState("");
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [guests, setGuests] = useState(2);
+  const [month, setMonth] = useState(() => todayInCostaRica().slice(0, 7));
 
   useEffect(() => {
     fetch("/api/pricing", { cache: "no-store" }).then((response) => response.ok ? response.json() : null)
@@ -45,6 +47,10 @@ export function DirectBookingForm({ initialDome }: { initialDome?: string }) {
   }, []);
 
   const activeDome = resolveBookingDome(dome, pricing?.perNight);
+  const monthEndDate = new Date(`${month}-01T12:00:00Z`);
+  monthEndDate.setUTCMonth(monthEndDate.getUTCMonth() + 1);
+  const monthPrices = useNightlyPricing(activeDome, `${month}-01`, monthEndDate.toISOString().slice(0, 10), refreshVersion);
+  const quote = useNightlyPricing(activeDome, checkIn, checkOut, refreshVersion);
 
   useEffect(() => {
     if (!activeDome) return;
@@ -69,10 +75,9 @@ export function DirectBookingForm({ initialDome }: { initialDome?: string }) {
   }, [activeDome, refreshVersion]);
 
   const selected = domes.find((item) => item.slug === activeDome);
-  const amountCents = checkIn && checkOut && pricing && activeDome
-    ? Math.max(0, nights(checkIn, checkOut)) * (pricing.perNight[activeDome] ?? 0) : 0;
-  const amount = pricing && amountCents > 0
-    ? new Intl.NumberFormat("es-CR", { style: "currency", currency: pricing.currency }).format(amountCents / 100)
+  const amountCents = quote.pricing?.amountCents ?? 0;
+  const amount = quote.pricing && amountCents > 0
+    ? new Intl.NumberFormat("es-CR", { style: "currency", currency: quote.pricing.currency }).format(amountCents / 100)
     : null;
   const [tomorrow] = useState(() => addDays(todayInCostaRica(), 1));
   const field = "mt-2 w-full rounded-2xl border border-border bg-warm-white px-4 py-3 text-ink outline-none focus:border-olive-500";
@@ -86,7 +91,7 @@ export function DirectBookingForm({ initialDome }: { initialDome?: string }) {
       setError("Las fechas no están disponibles o no pudieron verificarse.");
       return;
     }
-    if (!pricing || !amountCents) { setError("No se pudo calcular el precio."); return; }
+    if (!quote.pricing || !amountCents) { setError("No se pudo consultar el precio. Actualiza e intenta de nuevo."); return; }
     if (testMode && !testSecret) { setError("Introduce la clave de acceso para reservas sin cobro."); return; }
     const form = new FormData(event.currentTarget);
     const payload = {
@@ -112,6 +117,7 @@ export function DirectBookingForm({ initialDome }: { initialDome?: string }) {
       try { result = await response.json(); }
       catch { throw new Error("El servidor no pudo preparar el pago. Intenta de nuevo en unos momentos."); }
       if (!response.ok) {
+        if (response.status === 409) setRefreshVersion((value) => value + 1);
         const reference = typeof result.requestId === "string" && /^[a-f0-9-]{36}$/.test(result.requestId)
           ? ` Referencia de soporte: ${result.requestId}.` : "";
         throw new Error((result.error ?? "No se pudo iniciar la reserva.") + reference);
@@ -142,9 +148,11 @@ export function DirectBookingForm({ initialDome }: { initialDome?: string }) {
     </label>
     {dome && pricing && !activeDome ? <p role="status" className="text-sm text-muted">Las reservas en línea del domo seleccionado no están disponibles actualmente. Puedes elegir otro alojamiento en el selector.</p> : null}
     {activeDome ? <AvailabilityCalendar availability={availability} checkIn={checkIn} checkOut={checkOut}
+      month={month} onMonthChange={setMonth} pricing={monthPrices.pricing}
       onSelect={(arrival, departure) => { setCheckIn(arrival); setCheckOut(departure); setError(""); }} /> : null}
+    {monthPrices.error ? <p role="alert" className="text-sm text-red-700">{monthPrices.error}</p> : null}
     {activeDome ? <button type="button" disabled={busy} onClick={() => setRefreshVersion((value) => value + 1)}
-      className="text-sm font-medium text-olive-800 underline disabled:opacity-50">Actualizar disponibilidad</button> : null}
+      className="text-sm font-medium text-olive-800 underline disabled:opacity-50">Actualizar disponibilidad y precios</button> : null}
     <div className="grid gap-4 sm:grid-cols-2">
       <label className="text-sm font-medium text-ink">{t("Fecha de llegada")}
         <input required type="date" min={tomorrow} value={checkIn} onChange={(event) => {
@@ -171,9 +179,15 @@ export function DirectBookingForm({ initialDome }: { initialDome?: string }) {
         {countries.map(({ code, name }) => <option key={code} value={code}>{name}</option>)}
       </select>
     </label>
-    {amount ? <p className="rounded-2xl bg-sand-50 p-4 text-sm text-ink">
+    {quote.error ? <p role="alert" className="text-sm text-red-700">{quote.error}</p> : null}
+    {amount ? <div className="rounded-2xl bg-sand-50 p-4 text-sm text-ink">
+      <details className="mb-3"><summary className="cursor-pointer">Ver precio de cada noche</summary>
+        <ul className="mt-2 space-y-1">{quote.pricing?.nights.map((night) => <li key={night.date} className="flex justify-between gap-3">
+          <span>{night.date}</span><span>{new Intl.NumberFormat("es-CR", { style: "currency", currency: quote.pricing!.currency }).format(night.amountCents / 100)}</span>
+        </li>)}</ul>
+      </details>
       {nights(checkIn, checkOut)} noches · {testMode ? "Importe de referencia, sin cobro:" : "Total de la estadía:"} <strong>{amount}</strong>
-    </p> : <p className="text-sm text-muted">Selecciona las fechas para ver el precio final.</p>}
+    </div> : <p className="text-sm text-muted">{checkIn && checkOut && checkOut > checkIn ? "Consultando el precio de las noches…" : "Selecciona las fechas para ver el precio final."}</p>}
     <p className="text-xs leading-relaxed text-muted">{testMode
       ? "Esta modalidad permite confirmar una reserva sin cobro con una clave de acceso. Las noches confirmadas se publican en el calendario de disponibilidad."
       : "La reserva se confirma únicamente tras verificar el pago. Las plataformas externas actualizan sus calendarios iCal periódicamente, por lo que existe un riesgo residual de cruce de reservas."}</p>

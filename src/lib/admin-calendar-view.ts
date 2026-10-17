@@ -1,15 +1,19 @@
 import type { CalendarSource } from "@/lib/ical";
 import { validDate } from "@/lib/booking-validation";
+import type { PaymentLinkDiagnostic } from "@/lib/checkout-error";
 
 // Used only by authenticated administrator views. These fields must not be
 // added to public availability or iCal responses.
 export type AdminReservation = { id: string; dome: string; checkIn: string; checkOut: string; kind: "booking" | "manual";
   status: "pending" | "confirmed" | "cancelled" | "expired"; name: string; email: string; phone: string;
   country: string; guests: number; amountCents: number; currency: string; provider: string; note: string;
+  paymentEnvironment: "Test" | "Production";
   expiresAt: string | null; emailSent: boolean; ownerEmailRequired: boolean; ownerEmailSent: boolean; paymentIssue: string | null;
   cancelledAt: string | null; cancelledBy: string | null; cancellationReason: string | null;
   cancelledFrom: string | null; cancellationStart: string | null; cancellationEnd: string | null;
-  parentBlockId: string | null; paymentLinkPending: boolean };
+  parentBlockId: string | null; paymentLinkPending: boolean;
+  paymentLinkState: "closed" | "consumed" | "pending" | null;
+  paymentLinkCheckedAt: string | null; paymentLinkDiagnostic: PaymentLinkDiagnostic | null };
 
 export const adminReservationStatusLabels = {
   pending: "Pago pendiente", confirmed: "Confirmada", expired: "Solicitud vencida", cancelled: "Anulada",

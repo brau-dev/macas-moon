@@ -96,7 +96,10 @@ necesita un nuevo build/deploy después de guardar las variables.
 [alcance Functions](https://docs.netlify.com/build/functions/environment-variables/).
 
 La anulación administrativa añadida posteriormente sí necesita la migración
-**0004_admin_cancellations.sql** antes de publicar. Consulta los pasos en
+**0004_admin_cancellations.sql** antes de publicar. La revisión y resolución de
+enlaces requiere también **0005_payment_link_resolution.sql**.
+La preparación del cambio de Test a Producción añade **0006_payment_environment.sql**
+para conservar el entorno histórico de cada pago. Consulta los pasos en
 [Anular reservas y bloqueos](anular-reservas-y-bloqueos.md#migración-necesaria-antes-de-publicar).
 No se ha cambiado el comercio a Producción ni se han realizado cobros por ti.
 Las optimizaciones conservadoras y sus límites de ahorro se explican en
