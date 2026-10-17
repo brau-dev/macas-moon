@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Lora, Nunito_Sans } from "next/font/google";
+import localFont from "next/font/local";
 import { SiteChrome } from "@/components/layout/SiteChrome";
 import { LanguageProvider } from "@/i18n/LanguageProvider";
 import { JsonLd } from "@/components/seo/JsonLd";
@@ -7,16 +7,22 @@ import { websiteJsonLd } from "@/lib/jsonLd";
 import { site, siteUrl } from "@/lib/site";
 import "./globals.css";
 
-const lora = Lora({
-  subsets: ["latin"],
-  weight: ["500", "600", "700"],
+// Keep font assets in Git: builds must not depend on Google's CSS/URL format.
+const lora = localFont({
+  src: "./fonts/Lora-Variable.ttf",
+  weight: "500 700",
+  style: "normal",
+  fallback: ["Georgia", "serif"],
+  adjustFontFallback: "Times New Roman",
   variable: "--font-lora",
   display: "swap",
 });
 
-const nunito = Nunito_Sans({
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
+const nunito = localFont({
+  src: "./fonts/NunitoSans-Variable.ttf",
+  weight: "400 700",
+  style: "normal",
+  fallback: ["Arial", "sans-serif"],
   variable: "--font-nunito",
   display: "swap",
 });

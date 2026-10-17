@@ -7,6 +7,25 @@ import { PGlite } from "@electric-sql/pglite";
 import { hashAdminPassword, verifyAdminPassword } from "../src/lib/admin-password.mjs";
 import type { AdminReservation } from "../src/lib/admin-calendar-view";
 
+test("fonts are bundled with their licenses and never require the Google font loader", () => {
+  const layout = readFileSync("src/app/layout.tsx", "utf8");
+  assert(layout.includes('from "next/font/local"'));
+  assert(!layout.includes("next/font/google"));
+  for (const [name, hash] of [
+    ["Lora", "822a6621ccbe8d97d20ac88c1c41f5615c9c2c202eaa75f272cd452aac6475a7"],
+    ["NunitoSans", "f934d7142fb4784bf828da485b7dcbd90c0c80d514e9d49a5da0ed3a1ae2491d"],
+  ]) {
+    const path = `./fonts/${name}-Variable.ttf`;
+    assert(layout.includes(path));
+    const font = readFileSync(`src/app/${path}`);
+    assert.equal(font.readUInt32BE(0), 0x00010000, "Expected a TrueType font, not a downloaded HTML error page.");
+    assert.equal(createHash("sha256").update(font).digest("hex"), hash);
+    const license = readFileSync(`src/app/fonts/${name}-OFL.txt`, "utf8");
+    assert(license.startsWith("Copyright"));
+    assert(license.includes("SIL OPEN FONT LICENSE Version 1.1"));
+  }
+});
+
 function adminReservationFixture(change: Partial<AdminReservation> = {}): AdminReservation {
   return { id: "00000000-0000-4000-8000-000000000099", dome: "domo-amplio",
     checkIn: "2031-06-01", checkOut: "2031-06-03", kind: "booking", status: "confirmed",
