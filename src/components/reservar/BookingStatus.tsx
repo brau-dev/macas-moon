@@ -82,7 +82,6 @@ export function BookingStatus() {
       <p><strong>Domo:</strong> {getDome(status.dome)?.name ?? status.dome}</p>
       <p><strong>Estadía:</strong> {status.checkIn} al {status.checkOut}</p>
       <p><strong>{!status.simulatedPayment && status.status === "confirmed" ? "Total pagado:" : "Importe de la estadía:"}</strong> {amount}</p>
-      {status.simulatedPayment ? <p className="text-sm text-muted">Esta operación no genera un cargo real.</p> : null}
       {status.status === "confirmed" ? <p className="rounded-2xl bg-olive-50 p-4 font-medium text-olive-800">
         Reserva confirmada. {status.emailSent ? "Enviamos los detalles por correo." : "El correo de confirmación está pendiente; conserva este número de reserva."}
       </p> : status.status === "pending" ? <p className="rounded-2xl bg-sand-50 p-4">

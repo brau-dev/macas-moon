@@ -24,12 +24,18 @@ const login = await request("/admin/login", 200);
 assert.match(login.headers.get("cache-control") ?? "", /no-store/);
 assert.equal(login.headers.get("referrer-policy"), "no-referrer");
 assert.match(login.headers.get("x-robots-tag") ?? "", /noindex/);
-for (const path of ["/api/admin/calendar", "/api/reservations/not-a-uuid", "/.env.netlify", "/.env.local", "/db/001_reservations.sql", "/db/004_admin_cancellations.sql", "/db/005_payment_link_resolution.sql", "/db/006_payment_environment.sql", "/db/007_nightly_prices.sql", "/docs/deploy-reservas-con-pago.md", "/docs/deploy-casi-final.md"]) {
+for (const path of ["/api/admin/calendar", "/api/reservations/not-a-uuid", "/.env.netlify", "/.env.local", "/db/001_reservations.sql", "/db/004_admin_cancellations.sql", "/db/005_payment_link_resolution.sql", "/db/006_payment_environment.sql", "/db/007_nightly_prices.sql", "/db/008_payment_issue_resolutions.sql", "/docs/deploy-reservas-con-pago.md", "/docs/deploy-casi-final.md"]) {
   await request(path, path.includes("admin/calendar") ? 401 : path.includes("not-a-uuid") ? 400 : 404);
 }
 for (const method of ["PUT", "DELETE"]) {
   await request("/api/admin/prices", 401, { method, headers: { origin: base.origin, "Content-Type": "application/json" }, body: "{}" });
   await request("/api/admin/prices", 403, { method, headers: { origin: "https://attacker.invalid", "Content-Type": "application/json" }, body: "{}" });
+}
+for (const [origin, status] of [[base.origin, 401], ["https://attacker.invalid", 403]]) {
+  await request("/api/admin/reservations/00000000-0000-4000-8000-000000000099", status, {
+    method: "POST", headers: { origin, "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "resolve-payment-issue", acknowledged: true }),
+  });
 }
 const pricing = await request("/api/pricing", 200);
 assert.match(pricing.headers.get("cache-control") ?? "", /no-store/);

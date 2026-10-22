@@ -171,7 +171,7 @@ El pago completo necesita el retorno público y avisos de Tilopay: pruébalo en 
    .env.netlify nunca va en un commit. Git no incluye archivos locales sin commit.
    El [procedimiento CLI alternativo](pruebas-netlify-ical.md) permite desplegar archivos locales;
    conserva los indicadores de pago de esta guía, no los del modo gratuito.
-8. El deploy debe aplicar las migraciones pendientes de `netlify/database/migrations`, en orden: 0001 a 0007. La 0004 permite anular reservas; la 0005 gestiona enlaces y diagnósticos; la 0006 conserva el entorno de cada pago al pasar de Test a Producción; la 0007 permite ajustar precios por fecha desde el administrador. Las operaciones históricas de este proyecto son de Test. Si ya aplicaste las anteriores, no hace falta repetirlas. Consulta [la lista corta del deploy](deploy-casi-final.md).
+8. El deploy debe aplicar las migraciones pendientes de `netlify/database/migrations`, en orden: 0001 a 0008. La 0004 permite anular reservas; la 0005 gestiona enlaces y diagnósticos; la 0006 conserva el entorno de cada pago al pasar de Test a Producción; la 0007 permite ajustar precios por fecha desde el administrador; la 0008 guarda las revisiones de incidencias de pago realizadas desde el panel privado. Las operaciones históricas de este proyecto son de Test. Si ya aplicaste las anteriores, no hace falta repetirlas. Consulta [la lista corta del deploy](deploy-casi-final.md).
    Solo se aplican las pendientes. La tercera registra por separado el aviso de los dueños.
    No borres tablas ni datos.
 9. Abre /admin e inicia sesión. No deben aparecer avisos de configuración pendiente.

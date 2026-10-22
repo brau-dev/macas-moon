@@ -10,6 +10,8 @@ import { AdminCancellationDialog } from "@/components/admin/AdminCancellationDia
 import { AdminDayDetailsPopover } from "@/components/admin/AdminDayDetailsPopover";
 import { AdminPaymentLinkStatus } from "@/components/admin/AdminPaymentLinkStatus";
 import { AdminNightPrice } from "@/components/admin/AdminNightPrice";
+import { AdminPaymentIssueDialog } from "@/components/admin/AdminPaymentIssueDialog";
+import { AdminPaymentIssue, AdminResolvedPaymentIssue } from "@/components/admin/AdminPaymentIssue";
 import type { NightlyPricing } from "@/lib/nightly-pricing";
 import { adminReservationStatusLabels as statusLabels, isActiveAdminReservation,
   getAdminDayReservations, getAdminDaySources, type AdminReservation as Reservation } from "@/lib/admin-calendar-view";
@@ -45,6 +47,7 @@ export function AdminDashboard({ domes, checkout, siteOrigin }: { domes: Array<{
   const [selectedDay, setSelectedDay] = useState("");
   const [showHistory, setShowHistory] = useState(false);
   const [cancellation, setCancellation] = useState<Reservation | null>(null);
+  const [issueResolution, setIssueResolution] = useState<Reservation | null>(null);
   const [dayDetails, setDayDetails] = useState<{ day: string; dome: string; anchor: HTMLButtonElement } | null>(null);
   const [priceMode, setPriceMode] = useState(false);
   const [priceStart, setPriceStart] = useState("");
@@ -103,7 +106,8 @@ export function AdminDashboard({ domes, checkout, siteOrigin }: { domes: Array<{
       const result = await response.json();
       if (!response.ok) throw new Error(result.error ?? "No se pudo completar la operación.");
       setMessage(success ?? result.warning ?? "Operación completada.");
-      await refresh(url !== "/api/admin/prices" && (body as { action?: string } | undefined)?.action !== "retry-payment-link");
+      const action = (body as { action?: string } | undefined)?.action;
+      await refresh(url !== "/api/admin/prices" && action !== "retry-payment-link" && action !== "resolve-payment-issue");
       return true;
     } catch (reason) {
       // A failed provider request may still have saved a useful safe diagnostic.
@@ -157,8 +161,9 @@ export function AdminDashboard({ domes, checkout, siteOrigin }: { domes: Array<{
     {message ? <p role="status" className="mt-4 rounded-xl bg-olive-50 p-4 text-sm text-olive-900">{message}</p> : null}
     {calendar?.issues.length ? <section className="mt-5 rounded-2xl border border-red-200 bg-red-50 p-4">
       <h2 className="font-semibold text-red-900">Pagos que requieren atención</h2>
-      {calendar.issues.map((row) => <p key={row.id} className="mt-2 text-sm text-red-800">
-        {row.id} · {row.name} · {row.checkIn} → {row.checkOut}: {row.paymentIssue}</p>)}
+      {calendar.issues.map((row) => <AdminPaymentIssue key={row.id} row={row} busy={busy} onResolve={(target) => {
+        setError(""); setMessage(""); setDayDetails(null); setIssueResolution(target);
+      }} />)}
     </section> : null}
     <div className="mt-6 flex flex-wrap items-end gap-4">
       <label className="text-sm font-medium">Ver calendario de<select value={dome} disabled={busy} onChange={(event) => {
@@ -329,6 +334,7 @@ export function AdminDashboard({ domes, checkout, siteOrigin }: { domes: Array<{
               </p> : null}
               {row.parentBlockId ? <p className="mt-2 text-xs text-muted">Tramo conservado del bloqueo {row.parentBlockId}.</p> : null}
               <AdminPaymentLinkStatus row={row} environment={checkout.environment} />
+              <AdminResolvedPaymentIssue row={row} />
               <p className="mt-2 break-all text-xs text-muted">ID: {row.id}</p></div>
             <div className="flex flex-wrap gap-2">
               {row.paymentLinkPending && row.paymentEnvironment === checkout.environment ? <button className={actionClass} disabled={busy} onClick={() => mutate(`/api/admin/reservations/${row.id}`, "POST", { action: "retry-payment-link", dome: row.dome })}>Revisar enlace de pago</button> : null}
@@ -345,6 +351,13 @@ export function AdminDashboard({ domes, checkout, siteOrigin }: { domes: Array<{
       <AdminDayDetailsPopover anchor={dayDetails.anchor} day={dayDetails.day} dome={dome}
         domeName={selectedDome?.name ?? dome} reservations={rows} sources={calendar.imported}
         environment={checkout.environment} busy={busy} onClose={closeDayDetails} onRelease={releaseDates} /> : null}
+    {issueResolution ? <AdminPaymentIssueDialog key={`${issueResolution.id}:${issueResolution.paymentIssue}`} target={issueResolution}
+      domeName={domes.find((item) => item.slug === issueResolution.dome)?.name ?? issueResolution.dome}
+      busy={busy} error={error} onClose={() => { if (!busy) { setIssueResolution(null); setError(""); } }}
+      onConfirm={async (input) => {
+        const success = await mutate(`/api/admin/reservations/${issueResolution.id}`, "POST", input);
+        if (success) setIssueResolution(null);
+      }} /> : null}
     {cancellation ? <AdminCancellationDialog key={cancellation.id} target={cancellation}
       domeName={domes.find((item) => item.slug === cancellation.dome)?.name ?? cancellation.dome}
       busy={busy} error={error} onClose={() => { if (!busy) setCancellation(null); }}

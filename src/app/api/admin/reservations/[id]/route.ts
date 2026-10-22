@@ -8,6 +8,7 @@ import { getBooking } from "@/lib/booking-db";
 import { sendConfirmation } from "@/lib/booking-email";
 import { validReservationId } from "@/lib/booking-validation";
 import { closeInactivePaymentLink } from "@/lib/tilopay";
+import { resolvePaymentIssue } from "@/lib/admin-payment-issues";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,7 +21,13 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     if (!validReservationId(id)) throw new BookingError("Reserva inválida.", 400);
     const body = await readAdminJson(request);
     const { action } = body;
-    if (action === "cancel") {
+    if (action === "resolve-payment-issue") {
+      const result = await resolvePaymentIssue(id, body, process.env.ADMIN_USERNAME!);
+      return NextResponse.json({ ok: true, ...result,
+        warning: result.alreadyResolved ? "Esta incidencia ya estaba resuelta. Se conserva la revisión original."
+          : "Incidencia resuelta. Se conserva el historial; no se modificó la reserva ni se realizó un reembolso." },
+      { headers: privateHeaders });
+    } else if (action === "cancel") {
       const result = await cancelLocalReservation(id, body, process.env.ADMIN_USERNAME!);
       return NextResponse.json({ ok: true, ...result }, { headers: privateHeaders });
     } else if (action === "cancel-test") {

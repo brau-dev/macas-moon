@@ -37,9 +37,10 @@ una respuesta 404 mientras siga pausado no demuestra un fallo del código.
    `BOOKING_TEST_SECRET`: ya no está en el archivo y la importación no borra variables ausentes.
 5. Revisa tus cambios, haz tú el commit y el push cuando estés conforme. Publica
    esta rama solo en el proyecto de pruebas. El agente no hace commits ni deploys.
-6. Comprueba que Netlify aplique las migraciones pendientes **0001 a 0007** antes
+6. Comprueba que Netlify aplique las migraciones pendientes **0001 a 0008** antes
    de publicar. Las nuevas son 0005 (estado/diagnóstico de enlaces), 0006 (entorno
-   histórico del pago) y 0007 (precios por noche). No borres tablas ni pegues SQL en variables de entorno.
+   histórico del pago), 0007 (precios por noche) y 0008 (historial de resolución de
+   incidencias de pago). No borres tablas ni pegues SQL en variables de entorno.
    Con Netlify Database nativo están en `netlify/database/migrations`; si gestionas
    SQL manualmente, aplica los archivos pendientes de `db/` en orden antes de publicar.
    [Migraciones nativas de Netlify](https://docs.netlify.com/build/data-and-storage/netlify-database/migrations/).
@@ -66,6 +67,15 @@ Test del comercio. El indicador de nuestra web no cambia la cuenta de Tilopay.
 - **Administrador:** comprobar ambos calendarios, cuadro de detalles al pulsar una
   noche, bloqueo manual y «Liberar fechas», incluyendo liberación parcial de un
   bloqueo. Una anulación conserva el historial y no hace reembolsos automáticos.
+- **Incidencias:** en `/admin → Pagos que requieren atención → Resolver incidencia`,
+  comprobar el cuadro «¿Resolver esta incidencia?». «Volver sin cambios» no guarda
+  nada. Para resolverla, escribir el resultado de la revisión, marcar la confirmación
+  y pulsar «Sí, resolver incidencia». El aviso desaparece de pendientes y la ficha
+  conserva «Incidencia resuelta» con motivo original, nota, administrador y fecha.
+  No modifica la reserva, la disponibilidad ni el pago; no cierra enlaces ni hace
+  reembolsos. No resolver un cobro real sin revisar y atender antes lo ocurrido.
+  Una incidencia diferente de la misma reserva vuelve a mostrarse, sin perder las
+  revisiones anteriores. No se resuelve ninguna automáticamente al aplicar la migración.
 - **Precios por fecha:** seguir [esta comprobación](precios-por-fecha.md). Guardar
   un precio para varias noches, comprobar el total público y restaurar la tarifa
   base. Los cambios no modifican reservas ni enlaces de pago anteriores.

@@ -24,9 +24,6 @@ export default async function ReservarPage({ searchParams }: {
           Continúa al pago seguro para finalizar tu solicitud. Recibirás la confirmación y
           los detalles de tu estadía por correo cuando verifiquemos la operación.
         </p>
-        {process.env.TILOPAY_EXPECTED_ENVIRONMENT === "Test" ? <p className="mt-4 max-w-md text-xs text-muted">
-          Esta operación no realiza cargos reales. Utiliza únicamente los datos de tarjeta de simulación autorizados por Tilopay.
-        </p> : null}
         {domo && isDomeActive(domo) && getDome(domo) ? <p className="mt-6 text-sm text-olive-800">Seleccionado: {getDome(domo)?.name}</p> : null}
       </div>
       <div className="rounded-[24px] border border-border-soft bg-warm-white p-5 shadow-soft sm:rounded-[28px] sm:p-8">

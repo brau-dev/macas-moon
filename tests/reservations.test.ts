@@ -65,12 +65,43 @@ function adminReservationFixture(change: Partial<AdminReservation> = {}): AdminR
     name: "Fixture Guest", email: "guest@example.com", phone: "+50688888888", country: "CR", guests: 2,
     amountCents: 34000, currency: "USD", provider: "tilopay", note: "", expiresAt: null,
     paymentEnvironment: "Test",
-    emailSent: true, ownerEmailRequired: true, ownerEmailSent: true, paymentIssue: null,
+    emailSent: true, ownerEmailRequired: true, ownerEmailSent: true, paymentIssue: null, paymentIssueResolution: null,
     cancelledAt: null, cancelledBy: null, cancellationReason: null, cancelledFrom: null,
     cancellationStart: null, cancellationEnd: null, parentBlockId: null, paymentLinkPending: false,
     paymentLinkState: null, paymentLinkCheckedAt: null, paymentLinkDiagnostic: null,
     ...change };
 }
+
+test("payment issues have a private resolution action with explicit confirmation and escaped history", async () => {
+  const { createElement } = await import("react");
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  const { AdminPaymentIssue, AdminResolvedPaymentIssue } = await import("../src/components/admin/AdminPaymentIssue");
+  const { AdminPaymentIssueDialog } = await import("../src/components/admin/AdminPaymentIssueDialog");
+  const row = adminReservationFixture({ paymentIssue: "Pago aprobado sin reserva <script>" });
+  const unresolved = renderToStaticMarkup(createElement(AdminPaymentIssue, { row, busy: false, onResolve() {} }));
+  assert(unresolved.includes("Resolver incidencia")); assert(unresolved.includes("&lt;script&gt;")); assert(!unresolved.includes("<script>"));
+  const modal = renderToStaticMarkup(createElement(AdminPaymentIssueDialog, { target: row, domeName: "Domo amplio",
+    busy: false, error: "", onClose() {}, async onConfirm() {} }));
+  assert(modal.includes("¿Resolver esta incidencia?")); assert(modal.includes("Estoy seguro de cerrar esta incidencia"));
+  assert(modal.includes("Resultado de la revisión")); assert(modal.includes("Volver sin cambios"));
+  assert(modal.includes('type="checkbox"')); assert(modal.includes('required=""')); assert(modal.includes('disabled=""'));
+  assert(modal.includes("no realiza ni acredita un reembolso")); assert(modal.includes("no cierra enlaces de pago"));
+  const resolved = { ...row, paymentIssueResolution: { resolvedAt: "2036-01-01T12:00:00Z", resolvedBy: "owner",
+    note: "Revisado <script>" } };
+  assert.equal(renderToStaticMarkup(createElement(AdminPaymentIssue, { row: resolved, busy: false, onResolve() {} })), "");
+  const history = renderToStaticMarkup(createElement(AdminResolvedPaymentIssue, { row: resolved }));
+  assert(history.includes("Incidencia resuelta")); assert(history.includes("owner")); assert(history.includes("Motivo original"));
+  assert(history.includes("Revisado &lt;script&gt;")); assert(!history.includes("Resolver incidencia</button>"));
+});
+
+test("public booking screens have no simulation banners and never relabel a simulated amount as paid", () => {
+  const page = readFileSync("src/app/reservar/page.tsx", "utf8");
+  const status = readFileSync("src/components/reservar/BookingStatus.tsx", "utf8");
+  assert(!page.includes("Esta operación no realiza cargos reales"));
+  assert(!page.includes("tarjeta de simulación")); assert(!status.includes("Esta operación no genera un cargo real"));
+  assert(status.includes('!status.simulatedPayment && status.status === "confirmed"'));
+  assert(status.includes("Importe de la estadía:"));
+});
 
 test("Netlify import policy separates public settings from credentials and prepares paid mode without leaking values", async () => {
   const { classifyNetlifyEnv, formatPaidNetlifyEnv } = await import("../scripts/netlify-env-policy.mjs");
@@ -199,6 +230,9 @@ test("reservations, payments, iCal and private administration", async (t) => {
   const nightlyPrices = readFileSync("db/007_nightly_prices.sql", "utf8");
   await sql.exec(nightlyPrices); await sql.exec(nightlyPrices);
   assert.equal(nightlyPrices, readFileSync("netlify/database/migrations/0007_nightly_prices.sql", "utf8"));
+  const issueResolutions = readFileSync("db/008_payment_issue_resolutions.sql", "utf8");
+  await sql.exec(issueResolutions); await sql.exec(issueResolutions);
+  assert.equal(issueResolutions, readFileSync("netlify/database/migrations/0008_payment_issue_resolutions.sql", "utf8"));
 
   let queue = Promise.resolve();
   let failBookingRead = false;
@@ -1193,6 +1227,69 @@ test("reservations, payments, iCal and private administration", async (t) => {
       for (const invalid of [null, [], {}, { perNight: [] }]) assert(comparePublishedPricing(values, invalid).length > 0);
       values.set("BOOKING_ACTIVE_DOMES", "domo-amplio");
       assert(comparePublishedPricing(values, both).some((error: string) => error.includes("desactivado")));
+    });
+    await t.test("payment issue resolution requires a private session, same origin, confirmation and an exact incident", async () => {
+      const api = await import("../src/app/api/admin/reservations/[id]/route");
+      const created = await service.startReservation(payload("2036-01-01", "2036-01-02"), null, "https://fixture.netlify.app");
+      const issue = "Pago aprobado sin bloqueo vigente. Revisar el pago.";
+      await db.expireBooking(created.id); await db.recordPaymentCheck(created.id, issue);
+      const context = { params: Promise.resolve({ id: created.id }) };
+      const body = { action: "resolve-payment-issue", dome: "domo-amplio", issue,
+        note: "Operación revisada en Tilopay y atendida.", acknowledged: true };
+      const request = (change = {}, origin = "http://localhost") => new Request("http://localhost/api/admin/reservations/" + created.id,
+        { method: "POST", headers: { origin, "Content-Type": "application/json" }, body: JSON.stringify({ ...body, ...change }) });
+      cookieValues.clear();
+      assert.equal((await api.POST(request(), context)).status, 401);
+      assert.equal((await api.POST(request({}, "https://attacker.example"), context)).status, 403);
+      const token = await auth.loginAdmin("owner", "A-private-test-password!", new Request("http://localhost"));
+      cookieValues.set(auth.ADMIN_COOKIE, token);
+      try {
+        for (const change of [{ acknowledged: false }, { acknowledged: "true" }, { note: " " }, { note: "ab" }, { note: "x".repeat(501) }]) {
+          assert.equal((await api.POST(request(change), context)).status, 400);
+        }
+        assert.equal((await api.POST(request({ dome: "domo-romantico" }), context)).status, 404);
+        assert.equal((await api.POST(request({ issue: "Incidencia distinta" }), context)).status, 409);
+        assert.equal((await sql.query("SELECT * FROM payment_issue_resolutions WHERE reservation_id=$1", [created.id])).rows.length, 0);
+        const before = await db.getBooking(created.id);
+        const beforeIcs = await exportIcs();
+        const beforeCalls = [createdPayments, closedLinks, detailCalls, loginCalls, emailCalls];
+        const responses = await Promise.all([api.POST(request(), context), api.POST(request(), context)]);
+        for (const response of responses) {
+          assert.equal(response.status, 200); assert.match(response.headers.get("cache-control")!, /private.*no-store/);
+        }
+        const results = await Promise.all(responses.map(response => response.json()));
+        assert.deepEqual(results.map(result => result.alreadyResolved).sort(), [false, true]);
+        assert.deepEqual(await db.getBooking(created.id), before, "Resolution must never change the reservation/payment.");
+        assert.deepEqual([createdPayments, closedLinks, detailCalls, loginCalls, emailCalls], beforeCalls);
+        assert.equal((await exportIcs()).replace(/^DTSTAMP:.*\r?$/gm, ""), beforeIcs.replace(/^DTSTAMP:.*\r?$/gm, ""));
+        const audit = (await sql.query<{ resolved_by: string; issue: string; note: string; resolved_at: Date }>(
+          "SELECT * FROM payment_issue_resolutions WHERE reservation_id=$1", [created.id])).rows;
+        assert.equal(audit.length, 1); assert.equal(audit[0].resolved_by, "owner"); assert.equal(audit[0].issue, issue);
+        assert.equal(audit[0].note, body.note); assert(audit[0].resolved_at);
+        const calendar = await manual.adminCalendar("domo-amplio", "2036-01-01", "2036-02-01", false);
+        assert(!calendar.issues.some(row => row.id === created.id));
+        const historical = calendar.reservations.find(row => row.id === created.id)!;
+        assert.equal(historical.paymentIssue, issue); assert.equal(historical.paymentIssueResolution?.note, body.note);
+        const again = await api.POST(request({ note: "No reemplazar el resultado original" }), context);
+        assert.equal(again.status, 200); assert.equal((await again.json()).alreadyResolved, true);
+        assert.deepEqual((await sql.query("SELECT * FROM payment_issue_resolutions WHERE reservation_id=$1", [created.id])).rows, audit);
+        // Re-checking the same payment must not recreate an acknowledged warning.
+        await db.recordPaymentCheck(created.id, issue);
+        assert(!(await manual.adminCalendar("domo-amplio", "2036-01-01", "2036-02-01", false)).issues.some(row => row.id === created.id));
+        // A different/new warning cannot be hidden by an old confirmation.
+        await db.recordPaymentCheck(created.id, "Nueva incidencia: revisar un pago diferente.");
+        assert.equal((await api.POST(request(), context)).status, 409);
+        const changed = await manual.adminCalendar("domo-amplio", "2036-01-01", "2036-02-01", false);
+        assert(changed.issues.some(row => row.id === created.id));
+        assert.equal(changed.reservations.find(row => row.id === created.id)!.paymentIssueResolution, null);
+        assert.equal((await sql.query("SELECT * FROM payment_issue_resolutions WHERE reservation_id=$1", [created.id])).rows.length, 1);
+        const { GET: publicStatus } = await import("../src/app/api/reservations/[id]/route");
+        const publicBody = await (await publicStatus(new Request("http://localhost"), context)).text();
+        for (const privateValue of ["paymentIssue", "resolution", body.note, "resolved_by"]) assert(!publicBody.includes(privateValue));
+        // The second warning remains independently resolvable, preserving both reviews.
+        assert.equal((await api.POST(request({ issue: "Nueva incidencia: revisar un pago diferente." }), context)).status, 200);
+        assert.equal((await sql.query("SELECT * FROM payment_issue_resolutions WHERE reservation_id=$1", [created.id])).rows.length, 2);
+      } finally { await auth.logoutAdmin(); cookieValues.clear(); }
     });
     await t.test("administrative cancellation requires authentication, confirmation, reason and financial acknowledgement", async () => {
       const cancellation = await import("../src/lib/admin-cancellation");

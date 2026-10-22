@@ -2,6 +2,8 @@ import type { CalendarSource } from "@/lib/ical";
 import { validDate } from "@/lib/booking-validation";
 import type { PaymentLinkDiagnostic } from "@/lib/checkout-error";
 
+export type PaymentIssueResolution = { resolvedAt: string; resolvedBy: string; note: string };
+
 // Used only by authenticated administrator views. These fields must not be
 // added to public availability or iCal responses.
 export type AdminReservation = { id: string; dome: string; checkIn: string; checkOut: string; kind: "booking" | "manual";
@@ -9,6 +11,7 @@ export type AdminReservation = { id: string; dome: string; checkIn: string; chec
   country: string; guests: number; amountCents: number; currency: string; provider: string; note: string;
   paymentEnvironment: "Test" | "Production";
   expiresAt: string | null; emailSent: boolean; ownerEmailRequired: boolean; ownerEmailSent: boolean; paymentIssue: string | null;
+  paymentIssueResolution: PaymentIssueResolution | null;
   cancelledAt: string | null; cancelledBy: string | null; cancellationReason: string | null;
   cancelledFrom: string | null; cancellationStart: string | null; cancellationEnd: string | null;
   parentBlockId: string | null; paymentLinkPending: boolean;

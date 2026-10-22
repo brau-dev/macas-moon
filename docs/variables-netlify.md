@@ -131,7 +131,7 @@ las copias por separado: usa el maestro para evitar valores desactualizados.
 
 El sitio de pruebas está pausado por decisión del propietario. No necesitas
 reactivarlo para estas comprobaciones locales. Antes de publicar, importa y revisa
-las variables, comprueba la rama `feature/reservas` y las migraciones 0001–0007.
+las variables, comprueba la rama `feature/reservas` y las migraciones 0001–0008.
 Reactiva el proyecto cuando estés listo para publicar y hacer las pruebas de
 aceptación de [deploy-casi-final.md](deploy-casi-final.md).
 

@@ -10,6 +10,9 @@ import { getCalendarSources } from "@/lib/ical";
 import { getCombinedAvailability } from "@/lib/combined-availability";
 import { overlapsBlocked } from "@/lib/availability-types";
 import { adminPrices } from "@/lib/admin-pricing";
+import type { PaymentIssueResolution } from "@/lib/admin-calendar-view";
+
+type AdminBooking = Booking & { issue_resolution?: PaymentIssueResolution | null };
 
 export function validateAdminDome(dome: string) {
   if (!getDome(dome) || !isDomeActive(dome)) throw new BookingError("Domo no habilitado.", 400);
@@ -21,17 +24,23 @@ export async function adminCalendar(dome: string, start: string, end: string, re
   if (!getDome(dome)) throw new BookingError("Domo desconocido.", 400);
   const [imported, reservations, issues, pricing] = await Promise.all([
     getCalendarSources(dome, refresh),
-    getPool().query<Booking>(`SELECT ${bookingColumns} FROM reservations
+    getPool().query<AdminBooking>(`SELECT ${bookingColumns},
+      (SELECT json_build_object('resolvedAt', resolution.resolved_at, 'resolvedBy', resolution.resolved_by, 'note', resolution.note)
+        FROM payment_issue_resolutions resolution WHERE resolution.reservation_id = reservations.id
+          AND resolution.issue = reservations.payment_issue) AS issue_resolution FROM reservations
       WHERE dome = $1 AND check_in < $3::date AND check_out > $2::date ORDER BY check_in, created_at`, [dome, start, end]),
     getPool().query<Booking>(`SELECT ${bookingColumns} FROM reservations
-      WHERE dome = $1 AND payment_issue IS NOT NULL ORDER BY created_at DESC LIMIT 50`, [dome]),
+      WHERE dome = $1 AND payment_issue IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM payment_issue_resolutions resolution
+          WHERE resolution.reservation_id = reservations.id AND resolution.issue = reservations.payment_issue)
+      ORDER BY created_at DESC LIMIT 50`, [dome]),
     adminPrices(dome, start, end),
   ]);
   // Viewing a calendar must not run cleanup transactions. Expired holds are
   // displayed correctly without writes; booking/block creation still releases
   // them atomically before acquiring the unique night rows.
   const now = Date.now();
-  const expose = (row: Booking) => ({ id: row.id, dome: row.dome, checkIn: row.check_in, checkOut: row.check_out,
+  const expose = (row: AdminBooking) => ({ id: row.id, dome: row.dome, checkIn: row.check_in, checkOut: row.check_out,
     kind: row.kind, status: row.status === "pending" && row.expires_at && row.expires_at.valueOf() <= now ? "expired" : row.status,
     name: row.guest_name, email: row.guest_email, phone: row.guest_phone,
     country: row.billing_country, guests: row.guests, amountCents: row.amount_cents, currency: row.currency,
@@ -39,6 +48,7 @@ export async function adminCalendar(dome: string, start: string, end: string, re
     note: row.admin_note, expiresAt: row.expires_at?.toISOString() ?? null,
     emailSent: Boolean(row.confirmation_email_sent_at), ownerEmailRequired: row.owner_notification_required,
     ownerEmailSent: Boolean(row.owner_notification_sent_at), paymentIssue: row.payment_issue,
+    paymentIssueResolution: row.issue_resolution ?? null,
     cancelledAt: row.cancelled_at?.toISOString() ?? null, cancelledBy: row.cancelled_by,
     cancellationReason: row.cancellation_reason, cancelledFrom: row.cancelled_from_status,
     cancellationStart: row.cancellation_check_in, cancellationEnd: row.cancellation_check_out,
