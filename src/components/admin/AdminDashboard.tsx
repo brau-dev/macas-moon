@@ -11,6 +11,7 @@ import { AdminDayDetailsPopover } from "@/components/admin/AdminDayDetailsPopove
 import { AdminPaymentLinkStatus } from "@/components/admin/AdminPaymentLinkStatus";
 import { AdminPaymentVerificationStatus } from "@/components/admin/AdminPaymentVerificationStatus";
 import { AdminNightPrice } from "@/components/admin/AdminNightPrice";
+import { AdminCalendarLegend, calendarDotColors } from "@/components/admin/AdminCalendarLegend";
 import { AdminPaymentIssueDialog } from "@/components/admin/AdminPaymentIssueDialog";
 import { AdminPaymentIssue, AdminResolvedPaymentIssue } from "@/components/admin/AdminPaymentIssue";
 import type { NightlyPricing } from "@/lib/nightly-pricing";
@@ -185,13 +186,12 @@ export function AdminDashboard({ domes, checkout, siteOrigin }: { domes: Array<{
     {selectedDome && !selectedDome.enabled ? <p className="mt-2 text-sm text-muted">Las reservas en línea de este domo están desactivadas. Puedes consultar su historial; habilítalo en BOOKING_ACTIVE_DOMES cuando su configuración esté completa.</p> : null}
     <section className="mt-4 rounded-2xl border border-border bg-warm-white p-4 text-sm" aria-label="Enlace de sincronización iCal">
       <h2 className="font-semibold">Sincronización de {selectedDome?.name}</h2>
-      <p className="mt-2 text-muted">Importa este enlace en los anuncios correspondientes de Airbnb y Expedia. Cambia el selector para obtener el enlace del otro domo.</p>
+      <p className="mt-2 text-muted">Enlace de iCal:</p>
       <code className="mt-3 block break-all rounded-xl bg-sand-50 p-3 text-xs">{exportUrl}</code>
       {siteOrigin ? <button type="button" className={cn(actionClass, "mt-3")} onClick={async () => {
         try { await navigator.clipboard.writeText(exportUrl); setMessage("Enlace iCal copiado."); }
         catch { setError("No se pudo copiar el enlace. Selecciona y copia la dirección mostrada."); }
       }}>Copiar enlace iCal</button> : <p className="mt-2 text-xs text-muted">El enlace completo estará disponible en el sitio publicado.</p>}
-      <p className="mt-2 text-xs text-muted">El enlace sigue disponible aunque desactives nuevas reservas de este domo. No necesita usuario ni contraseña y no incluye datos del huésped.</p>
     </section>
     {!domes.length ? <p className="mt-5">No hay domos habilitados. Revisa BOOKING_ACTIVE_DOMES.</p> : null}
     <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -258,10 +258,10 @@ export function AdminDashboard({ domes, checkout, siteOrigin }: { domes: Array<{
               <span className="font-medium">{index + 1}</span>
               {calendar ? <AdminNightPrice day={day} night={priceMap.get(day)} currency={calendar.pricing?.currency ?? null} /> : null}
               <span className="mt-1 flex flex-wrap justify-center gap-1">
-                {local.some((row) => row.kind === "manual") ? <span title="Manual" className="h-2 w-2 rounded-full bg-purple-500" /> : null}
-                {local.some((row) => row.kind === "booking" && row.status === "confirmed") ? <span title="Reserva web" className="h-2 w-2 rounded-full bg-olive-700" /> : null}
-                {local.some((row) => row.status === "pending") ? <span title="Pago pendiente" className="h-2 w-2 rounded-full bg-amber-500" /> : null}
-                {sources.map((source) => <span key={source.name} title={source.name} className={cn("h-2 w-2 rounded-full", source.name === "Airbnb" ? "bg-rose-500" : "bg-blue-500")} />)}
+                {local.some((row) => row.kind === "manual") ? <span title="Manual" className={cn("h-2 w-2 rounded-full", calendarDotColors.manual)} /> : null}
+                {local.some((row) => row.kind === "booking" && row.status === "confirmed") ? <span title="Reserva web" className={cn("h-2 w-2 rounded-full", calendarDotColors.web)} /> : null}
+                {local.some((row) => row.status === "pending") ? <span title="Pago pendiente" className={cn("h-2 w-2 rounded-full", calendarDotColors.pending)} /> : null}
+                {sources.map((source) => <span key={source.name} title={source.name} className={cn("h-2 w-2 rounded-full", source.name === "Airbnb" ? calendarDotColors.airbnb : calendarDotColors.expedia)} />)}
               </span>
             </button>;
           })}
@@ -271,10 +271,8 @@ export function AdminDashboard({ domes, checkout, siteOrigin }: { domes: Array<{
           <span className="rounded-md border border-teal-200 bg-teal-50 px-2 py-1 font-semibold text-teal-950">{calendar?.pricing?.currency ?? "USD"}/noche</span>
           <span>Turquesa: precio configurado por noche para esa fecha en esta web.</span>
         </p>
-        <p className="mt-2 text-xs text-muted">Los precios del calendario no modifican los importes de reservas ya creadas.</p>
-        <p className="mt-4 text-xs leading-relaxed text-muted">Verde: reserva web · Morado: bloqueo manual · Ámbar: pago pendiente · Rosa: Airbnb · Azul: Expedia.</p>
+        <AdminCalendarLegend />
         <p className="mt-2 text-xs text-muted">{priceMode ? "Pulsa la primera y la última noche para cambiar el precio de todo el rango. Para una sola noche basta un clic." : "Pulsa una fecha ocupada para consultar sus detalles y liberar fechas de esta web."}</p>
-        <p className="mt-2 text-xs text-muted">Una noche puede aparecer en varios feeds por la sincronización. Los puntos de colores indican qué calendario la exporta, no necesariamente dónde se originó.</p>
       </section>
       {priceMode ? <form onSubmit={(event) => { event.preventDefault(); savePrice(); }} className="space-y-4 rounded-2xl border border-border bg-warm-white p-5">
         <h2 className="font-serif text-xl">Precio de las noches</h2>
@@ -316,7 +314,7 @@ export function AdminDashboard({ domes, checkout, siteOrigin }: { domes: Array<{
           <button type="button" aria-pressed={showHistory} className={actionClass} onClick={() => setShowHistory((value) => !value)}>{showHistory ? "Mostrar solo activas" : `Mostrar historial${historyCount ? ` (${historyCount})` : ""}`}</button>
           {selectedDay ? <button className={actionClass} onClick={() => setSelectedDay("")}>Ver todo el mes</button> : null}
         </div></div>
-      <p className="mt-2 text-sm text-muted">Los datos de huéspedes corresponden a reservas de esta web. iCal solo aporta noches ocupadas de los otros canales.</p>
+      <p className="mt-2 text-sm text-muted">Los datos de huéspedes corresponden a reservas de esta web.</p>
       <div className="mt-4 space-y-3">
         {visible.map((row) => <article key={row.id} className="rounded-2xl border border-border bg-warm-white p-5">
           <div className="flex flex-wrap items-start justify-between gap-3">
