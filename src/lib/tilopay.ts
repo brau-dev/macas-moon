@@ -261,7 +261,21 @@ async function verifiedPayment(booking: Booking, key: string, bearer: string,
         ![400, 404].includes(error.upstreamStatus ?? 0)) throw error;
       detailError = error;
       payments = await rememberedLinkPayments(booking);
-      if (!payments.length) throw error;
+      if (!payments.length) {
+        // A successful deletion requested by this application explains why detail
+        // is unavailable. Read fresh state: another worker may have closed it
+        // since the caller loaded the booking. Check evidence in the same query
+        // so a newly observed transaction is never discarded by this fallback.
+        const closed = await getPool().query(`SELECT id FROM reservations AS r
+          WHERE r.id = $1 AND r.payment_link_id = $2 AND r.payment_link_closed_at IS NOT NULL
+            AND NOT EXISTS (SELECT 1 FROM reservation_payment_attempts AS a WHERE a.reservation_id = r.id)`,
+        [booking.id, booking.payment_link_id]);
+        // null means expected missing detail after our closure, NOT proof that
+        // no charge occurred. Only true can confirm a booking. Future checks and
+        // callbacks still consult Tilopay to discover any newly visible payment.
+        if (closed.rows.length) return null;
+        throw error;
+      }
     }
     candidates = await linkPaymentCandidates(payments, booking, key, bearer);
   }
@@ -274,7 +288,7 @@ async function verifiedPayment(booking: Booking, key: string, bearer: string,
     if (result.response.some((payment) => payment && matchesApprovedPayment(payment, booking, order) &&
       (!transactionId || paymentId(payment.id_tilopay) === transactionId))) return true;
   }
-  // A missing link with no verified charge is unknown, never proof of no payment.
+  // A known attempt still needs verification even after our deletion of its link.
   if (detailError) throw detailError;
   return false;
 }
@@ -286,7 +300,7 @@ export function requirePaymentEnvironment(booking: Pick<Booking, "payment_enviro
   }
 }
 
-export async function paymentApproved(booking: Booking) {
+export async function paymentApproved(booking: Booking): Promise<boolean | null> {
   if (!booking.payment_reference) return false;
   requirePaymentEnvironment(booking);
   const { key } = credentials();

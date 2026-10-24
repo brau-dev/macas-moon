@@ -126,12 +126,14 @@ export async function reconcilePayment(id: string) {
   // Timestamp failed checks too, so one failing row cannot starve reconciliation.
   await recordPaymentCheck(id);
   const approved = await paymentApproved(booking);
-  if (!approved) {
+  // false: no approved transaction found; null: detail unavailable after our
+  // confirmed closure with no known attempt. Neither result confirms a booking.
+  if (approved !== true) {
     if (booking.status === "pending" && booking.expires_at && booking.expires_at.valueOf() <= Date.now()) {
       await expireBooking(id);
       return (await getBooking(id))!;
     }
-    return booking;
+    return (await getBooking(id)) ?? booking;
   }
   if (booking.status !== "pending") {
     const cancelled = booking.status === "cancelled";

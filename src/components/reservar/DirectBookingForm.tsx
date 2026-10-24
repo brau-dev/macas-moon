@@ -186,7 +186,7 @@ export function DirectBookingForm({ initialDome }: { initialDome?: string }) {
     </div> : <p className="text-sm text-muted">{checkIn && checkOut && checkOut > checkIn ? "Consultando el precio de las noches…" : "Selecciona las fechas para ver el precio final."}</p>}
     <p className="text-xs leading-relaxed text-muted">{testMode
       ? "Esta modalidad permite confirmar una reserva sin cobro con una clave de acceso. Las noches confirmadas se publican en el calendario de disponibilidad."
-      : "La reserva se confirma únicamente tras verificar el pago. Las plataformas externas actualizan sus calendarios iCal periódicamente, por lo que existe un riesgo residual de cruce de reservas."}</p>
+      : "La reserva se confirma únicamente tras verificar el pago."}</p>
     {testMode ? <label className="block text-sm font-medium text-ink">
       Clave de acceso para reservas sin cobro
       <input type="password" autoComplete="off" value={testSecret} onChange={(event) => setTestSecret(event.target.value)} className={field} />
@@ -198,8 +198,11 @@ export function DirectBookingForm({ initialDome }: { initialDome?: string }) {
     </> : null}
     {!testMode ? <p className="text-xs text-muted">Al continuar se abrirá la página segura de Tilopay en esta misma pestaña. No introduzcas los datos de tu tarjeta en este formulario.</p> : null}
     {error ? <p role="alert" className="text-sm text-red-700">{error}</p> : null}
+    {!testMode ? <p className="rounded-2xl bg-sand-50 p-4 text-sm leading-relaxed text-ink">
+      {t("Si el pago no se completa o cancelas el proceso, las fechas pueden quedar apartadas temporalmente. Espera entre 15 y 20 minutos desde que iniciaste la solicitud y pulsa «Actualizar disponibilidad» antes de intentarlo de nuevo. Si el pago fue aprobado, no lo repitas.")}
+    </p> : null}
     <Button type="submit" size="lg" className="w-full" disabled={busy || !amount || availability?.status !== "ready" || (testMode && !testSecret)}>
-      {busy ? "Procesando…" : testMode ? "Confirmar reserva sin cobro" : "Continuar al pago seguro"}
+      {busy ? "Procesando…" : testMode ? "Confirmar reserva sin cobro" : "Continuar al pago"}
     </Button>
   </form>;
 }

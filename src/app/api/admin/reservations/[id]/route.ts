@@ -57,7 +57,12 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
           : "La revisión ya está en curso o hubo un intento reciente. Espera dos minutos antes de volver a intentarlo. La reserva no cambió.";
       return NextResponse.json({ ok: true, warning }, { headers: privateHeaders });
     } else if (action === "reconcile") {
-      await reconcilePayment(id);
+      const current = await reconcilePayment(id);
+      if (current.payment_link_closed_at && current.status !== "confirmed" && current.cancelled_from_status !== "confirmed" &&
+        !current.payment_issue && !current.payment_verification_error) {
+        return NextResponse.json({ ok: true,
+          warning: "Enlace cerrado por la web. No se ha identificado un pago aprobado para esta solicitud." }, { headers: privateHeaders });
+      }
     } else if (action === "retry-email") {
       const booking = await getBooking(id);
       if (!booking || !await sendConfirmation(booking)) throw new BookingError("Correos ya enviados, reserva no confirmada o remitente no configurado.", 409);

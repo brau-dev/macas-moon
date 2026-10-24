@@ -18,7 +18,7 @@ async function request(path, status, init) {
 const home = await request("/", 200);
 assert(!/href="\/admin(?:["/])/.test(await home.text()));
 const booking = await request("/reservar", 200);
-assert((await booking.text()).includes("Continuar al pago seguro"), "Compila con NEXT_PUBLIC_BOOKING_TEST_MODE=false para esta comprobación de pago.");
+assert((await booking.text()).includes("Continuar al pago"), "Compila con NEXT_PUBLIC_BOOKING_TEST_MODE=false para esta comprobación de pago.");
 await request("/admin", 307);
 const login = await request("/admin/login", 200);
 assert.match(login.headers.get("cache-control") ?? "", /no-store/);

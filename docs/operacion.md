@@ -72,7 +72,7 @@ ni reembolsa una transacción. Un HTTP 400 no prueba que el enlace esté cerrado
 | Enlace cerrado | Tilopay confirmó su eliminación; no acredita ausencia de cobro ni reembolso. |
 | Uso consumido | Enlace `Just Once` con transacción exacta verificada. Puede seguir vencida/anulada y requerir atención por pago tardío; no se intenta borrarlo repetidamente. |
 | Estado del enlace sin confirmar | Conservar el aviso y abrir **Información para soporte**. Compartir referencia, etapa y códigos, nunca credenciales ni datos de tarjeta. |
-| **Pago sin verificar** | Falló la consulta, incluso si el enlace consta cerrado. No prueba un cobro ni una compra abandonada; revisar la transacción antes de darlo por atendido. |
+| **Pago sin verificar** | Falló una consulta o queda un intento de pago conocido sin verificar. No prueba un cobro ni una compra abandonada; revisar la transacción antes de darlo por atendido. |
 
 Antes de eliminar un enlace se inspecciona su detalle y se conservan identidades
 autenticadas de intentos conocidos. Si esa lectura falla, no se solicita la
@@ -84,8 +84,11 @@ describe el caso del pago en proceso que todavía no aparece en ese detalle.
 El respaldo reintenta verificaciones de solicitudes vencidas recientes durante
 siete días; los enlaces antiguos sin resolver pueden seguir requiriendo revisión.
 Los avisos de pago se muestran para el domo aunque no pertenezcan al mes elegido.
-«Pago sin verificar» se retira tras una consulta autenticada satisfactoria; no
-borra una incidencia de pago aprobado ni se resuelve con el botón siguiente.
+Si la web tiene registrado un cierre confirmado y no hay intentos conocidos,
+el HTTP 400/404 posterior del detalle se trata como cierre esperado, sin aviso de
+error. Una nueva verificación retira el aviso anterior de ese caso; no demuestra
+ausencia de cobro. Las verificaciones posteriores continúan. Los intentos conocidos,
+otros errores y las incidencias de pagos aprobados conservan su tratamiento.
 
 Para **Resolver incidencia**, revisar y atender primero el cobro en Tilopay.
 En **Pagos que requieren atención**, abrir **Resolver incidencia**, escribir el

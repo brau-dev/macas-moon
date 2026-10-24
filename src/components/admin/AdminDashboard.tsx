@@ -114,7 +114,8 @@ export function AdminDashboard({ domes, checkout, siteOrigin }: { domes: Array<{
     } catch (reason) {
       // A failed provider request may still have saved a useful safe diagnostic.
       // Refresh it without importing OTA feeds or discarding the error message.
-      if ((body as { action?: string } | undefined)?.action === "retry-payment-link") await refresh(false);
+      const action = (body as { action?: string } | undefined)?.action;
+      if (action === "retry-payment-link" || action === "reconcile") await refresh(false);
       setError(reason instanceof Error ? reason.message : "Error de conexión."); return false;
     }
     finally { setBusy(false); }
@@ -292,7 +293,7 @@ export function AdminDashboard({ domes, checkout, siteOrigin }: { domes: Array<{
         {selectedNights > 0 ? <p role="status" className="text-sm font-medium">{selectedNights} {selectedNights === 1 ? "noche seleccionada" : "noches seleccionadas"}{selectedNights > 365 ? ": el rango supera el máximo de 365" : ""}.</p> : null}
         <button disabled={busy || !priceRangeReady || !nightPrice} className="w-full rounded-xl bg-olive-700 p-3 text-sm font-semibold text-white disabled:opacity-50">{busy ? "Guardando…" : "Aplicar precio a las noches seleccionadas"}</button>
         <button type="button" disabled={busy || !priceRangeReady} className={cn(actionClass, "w-full")} onClick={() => savePrice(true)}>Restablecer precio base en este rango</button>
-        <p className="text-xs text-muted">Solo cambia los precios de esta web. No modifica reservas ni enlaces de pago ya creados. Airbnb y Expedia mantienen sus propias tarifas: iCal sincroniza disponibilidad, no precios.</p>
+        <p className="text-xs text-muted">Solo cambia los precios de esta web. No modifica reservas ni enlaces de pago ya creados. Airbnb y Expedia mantienen sus propias tarifas.</p>
       </form> : <form onSubmit={block} className="space-y-4 rounded-2xl border border-border bg-warm-white p-5">
         <h2 className="font-serif text-xl">Bloquear noches manualmente</h2>
         <p className="text-sm font-medium text-olive-800">{selectedDome?.name}</p>

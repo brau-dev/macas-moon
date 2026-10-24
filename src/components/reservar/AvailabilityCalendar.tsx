@@ -86,10 +86,9 @@ export function AvailabilityCalendar({ availability, checkIn, checkOut, onSelect
     <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
       <span>{t("Disponible")}</span><span>● {t("Ocupado")}</span><span>{t("Seleccionado")}</span>
     </div>
-    <p className="mt-3 text-xs leading-relaxed text-muted" role="status">
-      {!availability ? "Consultando disponibilidad…" : ready
-        ? "Fechas consultadas en Airbnb, Expedia y reservas directas. Se verifican de nuevo antes del pago."
+    {!ready ? <p className="mt-3 text-xs leading-relaxed text-muted" role="status">
+      {!availability ? "Consultando disponibilidad…"
         : "No se pudo verificar toda la disponibilidad. Las reservas están deshabilitadas temporalmente."}
-    </p>
+    </p> : null}
   </div>;
 }
