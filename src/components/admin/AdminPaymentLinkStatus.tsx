@@ -3,7 +3,7 @@ import type { AdminReservation } from "@/lib/admin-calendar-view";
 export function AdminPaymentLinkStatus({ row, environment }: { row: AdminReservation; environment?: string }) {
   if (!row.paymentLinkState) return null;
   if (row.paymentLinkState === "consumed") return <p className="mt-2 text-sm text-muted">
-    Enlace de un solo uso: pago verificado y uso consumido. La reserva sigue anulada. Esto no acredita un reembolso.
+    Enlace de un solo uso: pago verificado y uso consumido. {row.status === "cancelled" ? "La reserva sigue anulada." : "La solicitud sigue vencida."} Esto no acredita un reembolso.
   </p>;
   if (row.paymentLinkState === "closed") return <p className="mt-2 text-sm text-muted">
     Enlace de pago cerrado en Tilopay. Esto no acredita un reembolso.

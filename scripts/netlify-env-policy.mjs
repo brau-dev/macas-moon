@@ -54,33 +54,3 @@ export function splitNetlifyEnv(values) {
     secret: section(netlifySecretKeys, "# PRIVADO. Importar CON Contains secret values. Alcance: Functions. No subir a Git."),
   };
 }
-
-// Pure formatting helper. Never logs values or writes files. The private file
-// must stay ignored by Git; comments do not set Netlify's secret flags.
-export function formatPaidNetlifyEnv(values) {
-  if (values.get("NEXT_PUBLIC_BOOKING_TEST_MODE") !== "false" || values.get("TILOPAY_CHECKOUT_ENABLED") !== "true") {
-    throw new Error("Solo se prepara la configuración con pago obligatorio.");
-  }
-  const groups = classifyNetlifyEnv(values);
-  if (groups.unknown.length || groups.managed.length) throw new Error("Revisa las variables desconocidas o administradas por Netlify antes de importar.");
-  const lines = [
-    "# ARCHIVO MAESTRO de macasmoon-reservas-testing. Privado: nunca subirlo a Git.",
-    "# Production de Netlify NO significa pagos reales; el modo se controla en Tilopay.",
-    "# Los comentarios no configuran la casilla Contains secret values de Netlify.",
-    "# Para importar por lotes: npm run env:split y usar los DOS archivos generados.",
-    "", "# 1. SIN MARCAR COMO SECRETOS (Builds + Functions).",
-  ];
-  for (const key of netlifyNonSecretKeys.filter((key) => values.has(key))) lines.push(`${key}=${quoteEnvValue(values.get(key).trim())}`);
-  lines.push("", "# 2. MARCAR COMO SECRETOS (Functions; no necesitan Builds).",
-    "# iCal privados, credenciales de pago, seguridad, Gmail y acceso administrador.");
-  for (const key of netlifySecretKeys.filter((key) => key !== "BOOKING_TEST_SECRET" && values.has(key))) {
-    const value = key === "SMTP_PASSWORD" ? values.get(key).replace(/\s/g, "") : values.get(key).trim();
-    lines.push(`${key}=${quoteEnvValue(value)}`);
-  }
-  lines.push("", "# BOOKING_TEST_SECRET se omite: aquí todas las reservas requieren pago.",
-    "# Si existe una clave antigua en Netlify, eliminar esa variable allí también.",
-    "# No importar URL, SITE_ID o NETLIFY_DB_URL: Netlify los proporciona.",
-    "# Para cobros reales: cambiar el comercio y TILOPAY_EXPECTED_ENVIRONMENT=Production.",
-    "# No cambiarlo aún. Resolver las operaciones Test y completar las pruebas primero.", "");
-  return lines.join("\n");
-}

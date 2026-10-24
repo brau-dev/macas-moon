@@ -16,7 +16,8 @@ export type AdminReservation = { id: string; dome: string; checkIn: string; chec
   cancelledFrom: string | null; cancellationStart: string | null; cancellationEnd: string | null;
   parentBlockId: string | null; paymentLinkPending: boolean;
   paymentLinkState: "closed" | "consumed" | "pending" | null;
-  paymentLinkCheckedAt: string | null; paymentLinkDiagnostic: PaymentLinkDiagnostic | null };
+  paymentLinkCheckedAt: string | null; paymentLinkDiagnostic: PaymentLinkDiagnostic | null;
+  paymentVerificationDiagnostic: PaymentLinkDiagnostic | null };
 
 export const adminReservationStatusLabels = {
   pending: "Pago pendiente", confirmed: "Confirmada", expired: "Solicitud vencida", cancelled: "Anulada",

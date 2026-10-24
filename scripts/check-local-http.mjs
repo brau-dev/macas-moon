@@ -24,7 +24,7 @@ const login = await request("/admin/login", 200);
 assert.match(login.headers.get("cache-control") ?? "", /no-store/);
 assert.equal(login.headers.get("referrer-policy"), "no-referrer");
 assert.match(login.headers.get("x-robots-tag") ?? "", /noindex/);
-for (const path of ["/api/admin/calendar", "/api/reservations/not-a-uuid", "/.env.netlify", "/.env.local", "/db/001_reservations.sql", "/db/004_admin_cancellations.sql", "/db/005_payment_link_resolution.sql", "/db/006_payment_environment.sql", "/db/007_nightly_prices.sql", "/db/008_payment_issue_resolutions.sql", "/docs/deploy-reservas-con-pago.md", "/docs/deploy-casi-final.md"]) {
+for (const path of ["/api/admin/calendar", "/api/reservations/not-a-uuid", "/.env.netlify", "/.env.local", "/db/001_reservations.sql", "/db/004_admin_cancellations.sql", "/db/005_payment_link_resolution.sql", "/db/006_payment_environment.sql", "/db/007_nightly_prices.sql", "/db/008_payment_issue_resolutions.sql", "/db/009_payment_link_deadline.sql", "/db/010_payment_verification_evidence.sql", "/docs/README.md", "/docs/configuracion-y-deploy.md", "/docs/operacion.md"]) {
   await request(path, path.includes("admin/calendar") ? 401 : path.includes("not-a-uuid") ? 400 : 404);
 }
 for (const method of ["PUT", "DELETE"]) {

@@ -469,7 +469,6 @@ export function ReservationForm({ initialDome }: ReservationFormProps) {
         <AvailabilityCalendar
           month={calendarMonth}
           onMonthChange={setCalendarMonth}
-          pricing={null}
           availability={availability}
           checkIn={checkIn}
           checkOut={checkOut}

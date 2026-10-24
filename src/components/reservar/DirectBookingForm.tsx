@@ -47,9 +47,6 @@ export function DirectBookingForm({ initialDome }: { initialDome?: string }) {
   }, []);
 
   const activeDome = resolveBookingDome(dome, pricing?.perNight);
-  const monthEndDate = new Date(`${month}-01T12:00:00Z`);
-  monthEndDate.setUTCMonth(monthEndDate.getUTCMonth() + 1);
-  const monthPrices = useNightlyPricing(activeDome, `${month}-01`, monthEndDate.toISOString().slice(0, 10), refreshVersion);
   const quote = useNightlyPricing(activeDome, checkIn, checkOut, refreshVersion);
 
   useEffect(() => {
@@ -148,11 +145,10 @@ export function DirectBookingForm({ initialDome }: { initialDome?: string }) {
     </label>
     {dome && pricing && !activeDome ? <p role="status" className="text-sm text-muted">Las reservas en línea del domo seleccionado no están disponibles actualmente. Puedes elegir otro alojamiento en el selector.</p> : null}
     {activeDome ? <AvailabilityCalendar availability={availability} checkIn={checkIn} checkOut={checkOut}
-      month={month} onMonthChange={setMonth} pricing={monthPrices.pricing}
+      month={month} onMonthChange={setMonth}
       onSelect={(arrival, departure) => { setCheckIn(arrival); setCheckOut(departure); setError(""); }} /> : null}
-    {monthPrices.error ? <p role="alert" className="text-sm text-red-700">{monthPrices.error}</p> : null}
     {activeDome ? <button type="button" disabled={busy} onClick={() => setRefreshVersion((value) => value + 1)}
-      className="text-sm font-medium text-olive-800 underline disabled:opacity-50">Actualizar disponibilidad y precios</button> : null}
+      className="text-sm font-medium text-olive-800 underline disabled:opacity-50">Actualizar disponibilidad</button> : null}
     <div className="grid gap-4 sm:grid-cols-2">
       <label className="text-sm font-medium text-ink">{t("Fecha de llegada")}
         <input required type="date" min={tomorrow} value={checkIn} onChange={(event) => {

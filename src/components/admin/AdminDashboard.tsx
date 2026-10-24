@@ -9,6 +9,7 @@ import type { CalendarSource } from "@/lib/ical";
 import { AdminCancellationDialog } from "@/components/admin/AdminCancellationDialog";
 import { AdminDayDetailsPopover } from "@/components/admin/AdminDayDetailsPopover";
 import { AdminPaymentLinkStatus } from "@/components/admin/AdminPaymentLinkStatus";
+import { AdminPaymentVerificationStatus } from "@/components/admin/AdminPaymentVerificationStatus";
 import { AdminNightPrice } from "@/components/admin/AdminNightPrice";
 import { AdminPaymentIssueDialog } from "@/components/admin/AdminPaymentIssueDialog";
 import { AdminPaymentIssue, AdminResolvedPaymentIssue } from "@/components/admin/AdminPaymentIssue";
@@ -161,9 +162,12 @@ export function AdminDashboard({ domes, checkout, siteOrigin }: { domes: Array<{
     {message ? <p role="status" className="mt-4 rounded-xl bg-olive-50 p-4 text-sm text-olive-900">{message}</p> : null}
     {calendar?.issues.length ? <section className="mt-5 rounded-2xl border border-red-200 bg-red-50 p-4">
       <h2 className="font-semibold text-red-900">Pagos que requieren atención</h2>
-      {calendar.issues.map((row) => <AdminPaymentIssue key={row.id} row={row} busy={busy} onResolve={(target) => {
+      {calendar.issues.map((row) => <div key={row.id}><AdminPaymentIssue row={row} busy={busy} onResolve={(target) => {
         setError(""); setMessage(""); setDayDetails(null); setIssueResolution(target);
-      }} />)}
+      }} /><AdminPaymentVerificationStatus row={row} />
+        {row.paymentVerificationDiagnostic && row.paymentEnvironment === checkout.environment ? <button className={cn(actionClass, "mt-2")} disabled={busy}
+          onClick={() => mutate(`/api/admin/reservations/${row.id}`, "POST", { action: "reconcile" })}>Verificar pago</button> : null}
+      </div>)}
     </section> : null}
     <div className="mt-6 flex flex-wrap items-end gap-4">
       <label className="text-sm font-medium">Ver calendario de<select value={dome} disabled={busy} onChange={(event) => {
@@ -326,7 +330,7 @@ export function AdminDashboard({ domes, checkout, siteOrigin }: { domes: Array<{
                 {row.status === "confirmed" && row.ownerEmailRequired ? <p className="mt-1 text-sm text-muted">
                   Aviso a los dueños: {row.ownerEmailSent ? "enviado" : "pendiente"}</p> : null}
               </>}
-              {row.status === "expired" ? <p className="mt-3 text-sm text-muted">El plazo de 30 minutos terminó sin confirmación en esta web. Esta solicitud no bloquea noches ni se exporta por iCal. El estado no acredita ni descarta un cobro: si hubo aprobación, revisa Tilopay.</p> : null}
+              {row.status === "expired" ? <p className="mt-3 text-sm text-muted">El plazo para confirmar la reserva terminó sin confirmación en esta web. Esta solicitud no bloquea noches ni se exporta por iCal. El estado no acredita ni descarta un cobro: si hubo aprobación, revisa Tilopay.</p> : null}
               {row.status === "cancelled" && row.cancellationReason ? <p className="mt-3 text-sm text-muted">
                 Anulación: {row.cancellationReason} · {row.cancelledBy}
                 {row.cancelledAt ? ` · ${new Date(row.cancelledAt).toLocaleString("es-CR", { timeZone: "America/Costa_Rica" })}` : ""}
@@ -334,6 +338,7 @@ export function AdminDashboard({ domes, checkout, siteOrigin }: { domes: Array<{
               </p> : null}
               {row.parentBlockId ? <p className="mt-2 text-xs text-muted">Tramo conservado del bloqueo {row.parentBlockId}.</p> : null}
               <AdminPaymentLinkStatus row={row} environment={checkout.environment} />
+              <AdminPaymentVerificationStatus row={row} />
               <AdminResolvedPaymentIssue row={row} />
               <p className="mt-2 break-all text-xs text-muted">ID: {row.id}</p></div>
             <div className="flex flex-wrap gap-2">

@@ -4,6 +4,7 @@ import { getPool, savePaymentLink, type Booking } from "@/lib/booking-db";
 import { CheckoutError, checkoutStep, paymentLinkDiagnostic, type CheckoutStage } from "@/lib/checkout-error";
 import { logServerError } from "@/lib/safe-log";
 import { trustedTilopayPaymentUrl } from "@/lib/tilopay-payment-url";
+import { isSingleUsePaymentLink } from "@/lib/tilopay-link-type";
 import { validDate } from "@/lib/booking-validation";
 import { addDays } from "@/lib/date-range";
 
@@ -111,6 +112,9 @@ async function readLinkDetail(booking: Booking, key: string, bearer: string) {
     result.detail.currency !== booking.currency || !amountMatches(result.detail.amount, booking.amount_cents)) {
     throw new CheckoutError("tilopay_check", "link_mismatch");
   }
+  // Keep only authenticated identities before a closure can remove this detail.
+  // Callback/webhook fields never enter this evidence table.
+  await rememberLinkPayments(result.payments, booking);
   return { detail: result.detail, payments: result.payments };
 }
 
@@ -129,6 +133,42 @@ function amountMatches(value: unknown, cents: number) {
     Math.round(Number(value) * 100) === cents;
 }
 
+async function rememberLinkPayments(payments: LinkPayment[], booking: Booking) {
+  if (payments.length > 20 || payments.some((payment) => !payment || typeof payment !== "object")) {
+    throw new CheckoutError("tilopay_check", "invalid_response");
+  }
+  const attempts = payments.map((payment) => {
+    const id = paymentId(payment.id);
+    const order = validOrder(payment.orderNumber) ? payment.orderNumber : null;
+    const timestamp = payment.create;
+    const day = typeof timestamp === "string" ? timestamp.slice(0, 10) : "";
+    if ((payment.id !== undefined && !id) || (!order && (!id ||
+      !amountMatches(payment.amount, booking.amount_cents) || payment.currency !== booking.currency ||
+      typeof timestamp !== "string" || !/^\d{4}-\d{2}-\d{2} ([01]\d|2[0-3]):[0-5]\d:[0-5]\d$/.test(timestamp) || !validDate(day)))) {
+      throw new CheckoutError("tilopay_check", "unsupported_payment");
+    }
+    return { identity: id ? `id:${id}` : `order:${order}`, transaction_id: id, order_number: order,
+      payment_day: validDate(day) ? day : null };
+  });
+  if (!attempts.length) return;
+  await getPool().query(`INSERT INTO reservation_payment_attempts
+    (reservation_id, identity, transaction_id, order_number, payment_day)
+    SELECT $1, identity, transaction_id, order_number, payment_day::date
+      FROM jsonb_to_recordset($2::jsonb) AS attempt(identity text, transaction_id text, order_number text, payment_day text)
+    ON CONFLICT (reservation_id, identity) DO NOTHING`, [booking.id, JSON.stringify(attempts)]);
+}
+
+async function rememberedLinkPayments(booking: Booking): Promise<LinkPayment[]> {
+  const { rows } = await getPool().query<{ transaction_id: string | null; order_number: string | null; payment_day: string | null }>(
+    `SELECT transaction_id, order_number, payment_day::text FROM reservation_payment_attempts
+      WHERE reservation_id = $1 LIMIT 21`, [booking.id]);
+  return rows.map((row) => ({ ...(row.transaction_id ? { id: row.transaction_id } : {}),
+    ...(row.order_number ? { orderNumber: row.order_number } : {}),
+    // These terms were checked against this booking before storing the identity.
+    amount: (booking.amount_cents / 100).toFixed(2), currency: booking.currency,
+    ...(row.payment_day ? { create: `${row.payment_day} 00:00:00` } : {}) }));
+}
+
 async function linkPaymentCandidates(payments: LinkPayment[], booking: Booking,
   key: string, bearer: string): Promise<PaymentCandidate[]> {
   if (payments.length > 20 || payments.some((payment) => !payment || typeof payment !== "object")) {
@@ -140,7 +180,8 @@ async function linkPaymentCandidates(payments: LinkPayment[], booking: Booking,
   // verify the individual transaction with consult. Never match by amount/email.
   const unresolved = new Map<string, Set<string>>();
   for (const payment of payments) {
-    if (payment.code !== undefined && payment.code !== "1") continue;
+    // An observed attempt can become approved later. Only consult decides its
+    // final state; an earlier declined/pending code must not discard its identity.
     if (validOrder(payment.orderNumber)) {
       const id = paymentId(payment.id);
       if (payment.id !== undefined && !id) throw new CheckoutError("tilopay_check", "unsupported_payment");
@@ -211,9 +252,18 @@ async function verifiedPayment(booking: Booking, key: string, bearer: string,
     throw new CheckoutError("tilopay_check", "unsupported_payment");
   }
   let candidates: PaymentCandidate[] = [{ order: booking.payment_reference }];
+  let detailError: unknown;
   if (booking.payment_link_id) {
-    const result = link ?? await readLinkDetail(booking, key, bearer);
-    candidates = await linkPaymentCandidates(result.payments, booking, key, bearer);
+    let payments: LinkPayment[];
+    try { payments = (link ?? await readLinkDetail(booking, key, bearer)).payments; }
+    catch (error) {
+      if (!(error instanceof CheckoutError) || error.reason !== "http" ||
+        ![400, 404].includes(error.upstreamStatus ?? 0)) throw error;
+      detailError = error;
+      payments = await rememberedLinkPayments(booking);
+      if (!payments.length) throw error;
+    }
+    candidates = await linkPaymentCandidates(payments, booking, key, bearer);
   }
   for (const { order, transactionId } of candidates) {
     const result = await api<{ type?: string; response?: Payment[] }>("consult",
@@ -224,6 +274,8 @@ async function verifiedPayment(booking: Booking, key: string, bearer: string,
     if (result.response.some((payment) => payment && matchesApprovedPayment(payment, booking, order) &&
       (!transactionId || paymentId(payment.id_tilopay) === transactionId))) return true;
   }
+  // A missing link with no verified charge is unknown, never proof of no payment.
+  if (detailError) throw detailError;
   return false;
 }
 
@@ -238,17 +290,26 @@ export async function paymentApproved(booking: Booking) {
   if (!booking.payment_reference) return false;
   requirePaymentEnvironment(booking);
   const { key } = credentials();
-  return verifiedPayment(booking, key, await token());
+  try {
+    const approved = await verifiedPayment(booking, key, await token());
+    await getPool().query("UPDATE reservations SET payment_verification_error = NULL WHERE id = $1", [booking.id]);
+    return approved;
+  } catch (error) {
+    await getPool().query("UPDATE reservations SET payment_verification_error = $2::jsonb WHERE id = $1",
+      [booking.id, JSON.stringify(paymentLinkDiagnostic(error, randomUUID()))]);
+    throw error;
+  }
 }
 
 export async function closeInactivePaymentLink(booking: Booking) {
   if (booking.payment_provider !== "tilopay" || !booking.payment_link_id || booking.payment_link_closed_at ||
-    booking.payment_link_consumed_at || !["expired", "cancelled"].includes(booking.status)) return;
+    booking.payment_link_consumed_at || !["pending", "expired", "cancelled"].includes(booking.status)) return;
   requirePaymentEnvironment(booking);
   // Atomically claim the attempt across serverless instances. Provider calls are
   // outside a transaction; never hold a DB connection open while waiting for HTTP.
   const claimed = await getPool().query<Booking>(`UPDATE reservations SET payment_link_checked_at = now()
-    WHERE id = $1 AND status IN ('expired','cancelled') AND payment_provider = 'tilopay'
+    WHERE id = $1 AND (status IN ('expired','cancelled') OR
+      (status = 'pending' AND COALESCE(payment_link_expires_at, expires_at) <= now())) AND payment_provider = 'tilopay'
       AND payment_link_id IS NOT NULL AND payment_link_closed_at IS NULL AND payment_link_consumed_at IS NULL
       AND (payment_link_checked_at IS NULL OR payment_link_checked_at < now() - interval '2 minutes')
     RETURNING *`, [booking.id]);
@@ -260,17 +321,21 @@ export async function closeInactivePaymentLink(booking: Booking) {
     await checkoutStep("payment_link_resolution", async () => {
       const { key } = credentials();
       const bearer = await token();
-      if (current.status === "cancelled" && current.cancelled_from_status === "confirmed") {
-        const link = await readLinkDetail(current, key, bearer);
-        // Do not infer consumption from a local status, a rejected attempt, or
-        // an unlimited/unknown link. Authenticate the exact approved transaction.
-        const singleUse = /^(1|single[ -]?use|single|one[ -]?time)$/i.test(String(link.detail.type));
-        if (singleUse && await verifiedPayment(current, key, bearer, link)) {
-          await getPool().query(`UPDATE reservations SET payment_link_consumed_at = now(), payment_link_error = NULL
-            WHERE id = $1 AND payment_link_id = $2 AND status = 'cancelled' AND cancelled_from_status = 'confirmed'`,
-          [booking.id, current.payment_link_id]);
-          return;
-        }
+      // Do not delete the only source of transaction identity when it cannot be
+      // inspected. A failed check leaves a diagnostic and a retriable closure.
+      const link = await readLinkDetail(current, key, bearer);
+      // Any authenticated single-use charge can be consumed, including a late
+      // payment. Do not retry deletion of a paid link or suppress its incident.
+      if (isSingleUsePaymentLink(link.detail.type) && await verifiedPayment(current, key, bearer, link)) {
+        if (current.status === "pending") return; // Reconciliation must confirm under the hold check.
+        await getPool().query(`UPDATE reservations SET payment_link_consumed_at = now(), payment_link_error = NULL,
+          payment_verification_error = NULL,
+          payment_issue = COALESCE(payment_issue, CASE WHEN status = 'cancelled' AND cancelled_from_status = 'confirmed' THEN NULL
+            WHEN status = 'cancelled' THEN 'Pago aprobado de una reserva anulada. Revisar el pago y gestionar el reembolso si corresponde; no confirmar automáticamente.'
+            ELSE 'Pago aprobado sin bloqueo vigente. Revisar disponibilidad y gestionar reembolso; no confirmar automáticamente.' END)
+          WHERE id = $1 AND payment_link_id = $2 AND status IN ('cancelled','expired')`,
+        [booking.id, current.payment_link_id]);
+        return;
       }
       const result = await api<{ type?: string | number; status?: number | string }>("deleteLinkPayment",
         { key, id: current.payment_link_id }, bearer);
@@ -278,7 +343,7 @@ export async function closeInactivePaymentLink(booking: Booking) {
         throw new CheckoutError("tilopay_close", "rejected", { providerCode: result.type, providerStatus: result.status });
       }
       await getPool().query(`UPDATE reservations SET payment_link_closed_at = now(), payment_link_error = NULL
-        WHERE id = $1 AND payment_link_id = $2 AND status IN ('cancelled','expired')`, [booking.id, current.payment_link_id]);
+        WHERE id = $1 AND payment_link_id = $2 AND status IN ('pending','cancelled','expired')`, [booking.id, current.payment_link_id]);
     });
   } catch (error) {
     const diagnostic = paymentLinkDiagnostic(error, reference);

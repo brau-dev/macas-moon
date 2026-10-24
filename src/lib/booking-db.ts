@@ -44,10 +44,12 @@ export type Booking = {
   kind: "booking" | "manual";
   admin_note: string;
   payment_link_id: string | null;
+  payment_link_expires_at: Date | null;
   payment_link_closed_at: Date | null;
   payment_link_consumed_at: Date | null;
   payment_link_checked_at: Date | null;
   payment_link_error: PaymentLinkDiagnostic | null;
+  payment_verification_error: PaymentLinkDiagnostic | null;
   payment_issue: string | null;
   payment_checked_at: Date | null;
   expires_at: Date | null;
@@ -67,8 +69,8 @@ export const bookingColumns = `id, dome, check_in::text, check_out::text, guests
   guest_phone, billing_address, billing_city, billing_state, billing_postal_code,
   billing_country, status, amount_cents, currency, payment_provider, payment_environment,
   payment_reference, expires_at, confirmation_email_sent_at, kind, admin_note,
-  payment_link_id, payment_link_closed_at, payment_link_consumed_at, payment_link_checked_at, payment_link_error,
-  payment_issue, payment_checked_at,
+  payment_link_id, payment_link_expires_at, payment_link_closed_at, payment_link_consumed_at, payment_link_checked_at, payment_link_error,
+  payment_issue, payment_checked_at, payment_verification_error,
   owner_notification_sent_at, owner_notification_required, cancelled_at, cancelled_by,
   cancellation_reason, cancelled_from_status, cancellation_check_in::text,
   cancellation_check_out::text, parent_block_id`;
@@ -117,8 +119,10 @@ export async function createBooking(booking: NewBooking) {
     await client.query(`INSERT INTO reservations
       (id, dome, check_in, check_out, guests, guest_name, guest_email, guest_phone,
        billing_country,
-       status, amount_cents, currency, payment_provider, payment_reference, payment_environment, nightly_prices, expires_at)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending',$10,$11,$12,$13,$14,$15::jsonb,now() + interval '30 minutes')`,
+       status, amount_cents, currency, payment_provider, payment_reference, payment_environment, nightly_prices,
+       payment_link_expires_at, expires_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending',$10,$11,$12,$13,$14,$15::jsonb,
+        CASE WHEN $12 = 'tilopay' THEN now() + interval '10 minutes' END, now() + interval '15 minutes')`,
       [booking.id, booking.dome, booking.check_in, booking.check_out, booking.guests,
         booking.guest_name, booking.guest_email, booking.guest_phone,
         booking.billing_country, booking.amount_cents,

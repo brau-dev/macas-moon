@@ -107,7 +107,7 @@ export async function startReservation(raw: unknown, testSecret: string | null, 
     return { id, status: "pending" as const, paymentUrl, amountCents: amount, currency };
   } catch (error) {
     // Cleanup must not replace the original payment failure with a second error.
-    // Unreleased holds still expire after 30 minutes; the scheduled job retries cleanup.
+    // Unreleased holds still expire after 15 minutes; the scheduled job retries cleanup.
     try { await checkoutStep("reservation_cleanup", () => expireBooking(id)); }
     catch (cleanupError) { logServerError("Reservation cleanup failed", cleanupError); }
     throw error;

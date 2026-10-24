@@ -52,7 +52,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       }
       const current = await getBooking(id);
       const warning = current?.payment_link_consumed_at
-        ? "Tilopay confirma que el enlace es de un solo uso y su pago está verificado. La reserva permanece anulada; no se realizó un reembolso."
+        ? `Tilopay confirma que el enlace es de un solo uso y su pago está verificado. ${current.status === "cancelled" ? "La reserva permanece anulada" : "La solicitud permanece vencida"}; no se realizó un reembolso.`
         : current?.payment_link_closed_at ? "Enlace cerrado en Tilopay. La reserva no cambió y no se realizó un reembolso."
           : "La revisión ya está en curso o hubo un intento reciente. Espera dos minutos antes de volver a intentarlo. La reserva no cambió.";
       return NextResponse.json({ ok: true, warning }, { headers: privateHeaders });

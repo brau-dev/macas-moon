@@ -6,7 +6,6 @@ import { overlapsBlocked } from "@/lib/availability-types";
 import { useLanguage } from "@/i18n/LanguageProvider";
 import { cn } from "@/lib/cn";
 import { todayInCostaRica } from "@/lib/date-range";
-import type { NightlyPricing } from "@/lib/nightly-pricing";
 
 function iso(year: number, month: number, day: number) {
   return `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
@@ -25,10 +24,9 @@ type Props = {
   onSelect: (checkIn: string, checkOut: string) => void;
   month: string;
   onMonthChange: (month: string) => void;
-  pricing: NightlyPricing | null;
 };
 
-export function AvailabilityCalendar({ availability, checkIn, checkOut, onSelect, month: monthValue, onMonthChange, pricing }: Props) {
+export function AvailabilityCalendar({ availability, checkIn, checkOut, onSelect, month: monthValue, onMonthChange }: Props) {
   const { t, language } = useLanguage();
   const month = new Date(`${monthValue}-01T12:00:00Z`);
   const year = month.getUTCFullYear();
@@ -37,10 +35,7 @@ export function AvailabilityCalendar({ availability, checkIn, checkOut, onSelect
   const leading = (new Date(year, monthIndex, 1).getDay() + 6) % 7;
   const today = todayInCostaRica();
   const changeMonth = (delta: number) => onMonthChange(new Date(Date.UTC(year, monthIndex + delta, 1)).toISOString().slice(0, 7));
-  const prices = new Map(pricing?.nights.map((night) => [night.date, night.amountCents]));
   const locale = language === "es" ? "es-CR" : language;
-  const money = new Intl.NumberFormat(locale, { style: "currency", currency: pricing?.currency ?? "USD",
-    currencyDisplay: "narrowSymbol", minimumFractionDigits: 0, maximumFractionDigits: 2 });
   const ready = availability?.status === "ready";
   const blocked = availability?.blocked ?? [];
   const labels = Array.from({ length: 7 }, (_, index) =>
@@ -79,20 +74,18 @@ export function AvailabilityCalendar({ availability, checkIn, checkOut, onSelect
         const selected = date === checkIn || date === checkOut;
         const inRange = Boolean(checkIn && checkOut && date > checkIn && date < checkOut);
         return <button key={date} type="button" disabled={past || (occupied && !checkoutAllowed) || !ready}
-          onClick={() => choose(date)} aria-label={`${date}: ${occupied ? t("Ocupado") : ready ? t("Disponible") : t("Sin verificar")}${prices.has(date) ? `, ${money.format(prices.get(date)! / 100)} ${pricing?.currency}` : ""}`}
+          onClick={() => choose(date)} aria-label={`${date}: ${occupied ? t("Ocupado") : ready ? t("Disponible") : t("Sin verificar")}`}
           aria-pressed={selected} className={cn("flex min-h-16 flex-col items-center justify-center rounded-xl text-sm transition-colors",
             occupied && "bg-sand-200 text-muted line-through", past && "text-sand-400",
             !past && !occupied && ready && "text-ink hover:bg-olive-100", inRange && "bg-olive-50",
             selected && "bg-olive-700 text-white", !ready && "cursor-not-allowed")}>
           <span>{index + 1}</span>
-          {!past && !occupied && prices.has(date) ? <span className="mt-1 text-[10px] sm:text-xs">{money.format(prices.get(date)! / 100)}</span> : null}
         </button>;
       })}
     </div>
     <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
       <span>{t("Disponible")}</span><span>● {t("Ocupado")}</span><span>{t("Seleccionado")}</span>
     </div>
-    {pricing ? <p className="mt-2 text-xs text-muted">Precios por noche en {pricing.currency}.</p> : null}
     <p className="mt-3 text-xs leading-relaxed text-muted" role="status">
       {!availability ? "Consultando disponibilidad…" : ready
         ? "Fechas consultadas en Airbnb, Expedia y reservas directas. Se verifican de nuevo antes del pago."

@@ -26,6 +26,28 @@ test("fonts are bundled with their licenses and never require the Google font lo
   }
 });
 
+test("public calendar shows availability without daily prices; quotes load only for the selected stay", async () => {
+  const { createElement } = await import("react");
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  const { AvailabilityCalendar } = await import("../src/components/reservar/AvailabilityCalendar");
+  const { LanguageProvider } = await import("../src/i18n/LanguageProvider");
+  for (const selected of [false, true]) {
+    const html = renderToStaticMarkup(createElement(LanguageProvider, null, createElement(AvailabilityCalendar, {
+      month: "2036-07", availability: { status: "ready", blocked: [{ start: "2036-07-10", end: "2036-07-12" }], checkedAt: null },
+      checkIn: selected ? "2036-07-01" : "", checkOut: selected ? "2036-07-03" : "", onSelect() {}, onMonthChange() {},
+    })));
+    assert(html.includes('aria-label="2036-07-01: Disponible"'));
+    assert(html.includes('aria-label="2036-07-10: Ocupado"'));
+    assert(html.includes(`aria-pressed="${selected}"`));
+    for (const text of ["USD", "$", "Precios por noche", "/noche"]) assert(!html.includes(text));
+  }
+  const source = readFileSync("src/components/reservar/DirectBookingForm.tsx", "utf8");
+  assert(source.includes("useNightlyPricing(activeDome, checkIn, checkOut, refreshVersion)"));
+  assert(!source.includes("monthPrices"));
+  assert.equal((source.match(/useNightlyPricing\(/g) ?? []).length, 1, "Do not fetch an unused whole month of prices.");
+  assert(source.includes("Ver precio de cada noche")); assert(source.includes("Total de la estadía:"));
+});
+
 test("admin calendar prices have their own color, exact amount, currency and nightly unit", async () => {
   const { createElement } = await import("react");
   const { renderToStaticMarkup } = await import("react-dom/server");
@@ -68,7 +90,7 @@ function adminReservationFixture(change: Partial<AdminReservation> = {}): AdminR
     emailSent: true, ownerEmailRequired: true, ownerEmailSent: true, paymentIssue: null, paymentIssueResolution: null,
     cancelledAt: null, cancelledBy: null, cancellationReason: null, cancelledFrom: null,
     cancellationStart: null, cancellationEnd: null, parentBlockId: null, paymentLinkPending: false,
-    paymentLinkState: null, paymentLinkCheckedAt: null, paymentLinkDiagnostic: null,
+    paymentLinkState: null, paymentLinkCheckedAt: null, paymentLinkDiagnostic: null, paymentVerificationDiagnostic: null,
     ...change };
 }
 
@@ -94,6 +116,16 @@ test("payment issues have a private resolution action with explicit confirmation
   assert(history.includes("Revisado &lt;script&gt;")); assert(!history.includes("Resolver incidencia</button>"));
 });
 
+test("Tilopay live Just Once links and documented aliases are single use; unknown types are not", async () => {
+  const { isSingleUsePaymentLink } = await import("../src/lib/tilopay-link-type");
+  for (const value of [1, "1", "Just Once", " just once ", "JUST ONCE", "Single use", "single-use", "single", "one-time"]) {
+    assert.equal(isSingleUsePaymentLink(value), true);
+  }
+  for (const value of [0, "0", "Unlimited", "Multiple", "Just Once Unlimited", "2", "", undefined, null, true, {}, [1]]) {
+    assert.equal(isSingleUsePaymentLink(value), false);
+  }
+});
+
 test("public booking screens have no simulation banners and never relabel a simulated amount as paid", () => {
   const page = readFileSync("src/app/reservar/page.tsx", "utf8");
   const status = readFileSync("src/components/reservar/BookingStatus.tsx", "utf8");
@@ -103,9 +135,9 @@ test("public booking screens have no simulation banners and never relabel a simu
   assert(status.includes("Importe de la estadía:"));
 });
 
-test("Netlify import policy separates public settings from credentials and prepares paid mode without leaking values", async () => {
-  const { classifyNetlifyEnv, formatPaidNetlifyEnv } = await import("../scripts/netlify-env-policy.mjs");
-  const { parseBookingEnv, validateBookingEnv } = await import("../scripts/booking-env.mjs");
+test("Netlify import policy separates public settings from credentials without leaking values", async () => {
+  const { classifyNetlifyEnv, splitNetlifyEnv } = await import("../scripts/netlify-env-policy.mjs");
+  const { validateBookingEnv } = await import("../scripts/booking-env.mjs");
   const values = new Map<string, string>([
     ["NEXT_PUBLIC_BOOKING_TEST_MODE", "false"], ["TILOPAY_CHECKOUT_ENABLED", "true"],
     ["TILOPAY_EXPECTED_ENVIRONMENT", "Test"], ["BOOKING_ACTIVE_DOMES", "domo-romantico,domo-amplio"],
@@ -125,23 +157,12 @@ test("Netlify import policy separates public settings from credentials and prepa
   assert(groups.secret.includes("ICAL_DOMO_ROMANTICO_AIRBNB_URL"));
   assert(!JSON.stringify(groups).includes("fixture-pass"));
   assert.equal(groups.unknown.length, 0);
-  const formatted = formatPaidNetlifyEnv(values);
-  const parsed = parseBookingEnv(formatted);
-  assert.deepEqual(parsed.errors, []);
-  assert.equal(parsed.values.get("SMTP_PASSWORD"), "abcdefghijklmnop");
-  assert.equal(parsed.values.get("TILOPAY_EXPECTED_ENVIRONMENT"), "Test");
-  assert.equal(parsed.values.get("NEXT_PUBLIC_BOOKING_TEST_MODE"), "false");
-  assert.equal(parsed.values.get("TILOPAY_API_PASSWORD"), values.get("TILOPAY_API_PASSWORD"));
-  assert(!parsed.values.has("BOOKING_TEST_SECRET")); assert(!formatted.includes("old-free-fixture-value"));
-  assert(formatted.indexOf("SMTP_USER=") < formatted.indexOf("# 2. MARCAR COMO SECRETOS"));
-  assert(formatted.indexOf("SMTP_PASSWORD=") > formatted.indexOf("# 2. MARCAR COMO SECRETOS"));
-  assert.equal(formatPaidNetlifyEnv(parsed.values), formatted);
   const typo = new Map([...values, ["BOOKING_RECONCIL_ENABLED", "true"]]);
   assert(validateBookingEnv(typo).errors.some((error: string) => error.includes("BOOKING_RECONCIL_ENABLED")));
-  assert.throws(() => formatPaidNetlifyEnv(typo));
+  assert.throws(() => splitNetlifyEnv(typo));
   const managed = new Map([...values, ["NETLIFY_DB_URL", "postgresql://fixture.invalid/private"]]);
   assert.deepEqual(classifyNetlifyEnv(managed).managed, ["NETLIFY_DB_URL"]);
-  assert.throws(() => formatPaidNetlifyEnv(managed));
+  assert.throws(() => splitNetlifyEnv(managed));
 });
 
 test("secret audit covers short API credentials and their encoded variants without treating booleans as secrets", async () => {
@@ -233,6 +254,14 @@ test("reservations, payments, iCal and private administration", async (t) => {
   const issueResolutions = readFileSync("db/008_payment_issue_resolutions.sql", "utf8");
   await sql.exec(issueResolutions); await sql.exec(issueResolutions);
   assert.equal(issueResolutions, readFileSync("netlify/database/migrations/0008_payment_issue_resolutions.sql", "utf8"));
+  const linkDeadline = readFileSync("db/009_payment_link_deadline.sql", "utf8");
+  await sql.exec(linkDeadline); await sql.exec(linkDeadline);
+  assert.equal(linkDeadline, readFileSync("netlify/database/migrations/0009_payment_link_deadline.sql", "utf8"));
+  assert.equal((await sql.query<{ payment_link_expires_at: Date | null }>(
+    "SELECT payment_link_expires_at FROM reservations WHERE id=$1", [legacyId])).rows[0].payment_link_expires_at, null);
+  const paymentEvidence = readFileSync("db/010_payment_verification_evidence.sql", "utf8");
+  await sql.exec(paymentEvidence); await sql.exec(paymentEvidence);
+  assert.equal(paymentEvidence, readFileSync("netlify/database/migrations/0010_payment_verification_evidence.sql", "utf8"));
 
   let queue = Promise.resolve();
   let failBookingRead = false;
@@ -314,14 +343,15 @@ test("reservations, payments, iCal and private administration", async (t) => {
   let feedEvent = "";
   const domeFeedEvents = new Map<string, string>();
   let nextLinkId = 10;
-  type Link = { reference: string; amount: string; currency: string; order: string; approved: boolean; environment: string };
+  type Link = { reference: string; amount: string; currency: string; order: string; approved: boolean; processing?: boolean; environment: string };
   const links = new Map<string, Link>();
   let paymentBody: Record<string, unknown> | null = null;
   let createdPayments = 0;
   let detailCalls = 0;
+  const unavailableLinkIds = new Set<string>();
   let closedLinks = 0;
   let closeLinkFailure = false;
-  let closeFixture: "normal" | "numeric" | "status-zero" | "http" | "timeout" = "normal";
+  let closeFixture: "normal" | "numeric" | "status-zero" | "http" | "bad-request" | "timeout" = "normal";
   let linkTypeFixture: string | number | undefined;
   let loginCalls = 0;
   let authFixture: "success" | "http" | "missing_token" = "success";
@@ -385,12 +415,13 @@ test("reservations, payments, iCal and private administration", async (t) => {
     if (url.includes("/getDetailLinkPayment/")) {
       detailCalls++;
       const id = url.split("/").at(-2)!;
+      if (unavailableLinkIds.has(id)) return new Response(null, { status: 400 });
       const link = links.get(id)!;
       return Response.json({ type: "200", detail: { id: Number(id), reference: detailFixture === "wrong_reference" ? "OTHER_REFERENCE" : link.reference,
-        amount: link.amount, currency: link.currency, type: linkTypeFixture }, payments: link.approved ? [detailFixture === "legacy"
+        amount: link.amount, currency: link.currency, type: linkTypeFixture }, payments: link.approved || link.processing ? [detailFixture === "legacy"
           ? { orderNumber: link.order }
           : { ...(detailFixture === "missing_id" ? {} : { id: 100_000 + Number(id) }),
-            amount: link.amount, currency: link.currency, code: "1",
+            amount: link.amount, currency: link.currency, ...(link.approved ? { code: "1" } : {}),
             create: detailFixture === "invalid_date" ? "2026-02-30 25:99:00" : "2026-10-14 18:00:00",
             card: "fixture-brand", response: "Aprobada", email: "guest@example.com", auth: "fixture-auth" }] : [] });
     }
@@ -421,6 +452,7 @@ test("reservations, payments, iCal and private administration", async (t) => {
     }
     if (url.endsWith("/deleteLinkPayment")) {
       closedLinks++;
+      if (closeFixture === "bad-request") return new Response("Private provider error fixture-password", { status: 400 });
       if (closeFixture === "http") return new Response("Private provider error fixture-password", { status: 401 });
       if (closeFixture === "timeout") throw new DOMException("Private provider URL", "TimeoutError");
       return Response.json({ type: closeLinkFailure ? "503" : closeFixture === "numeric" ? 200 : "200",
@@ -617,6 +649,14 @@ test("reservations, payments, iCal and private administration", async (t) => {
       assert(!(await exportIcs()).includes("20280702"));
       assert.equal((await service.reconcilePayment(result.id)).status, "pending");
       const booking = (await db.getBooking(result.id))!;
+      const timing = (await sql.query<{ hold_minutes: number; link_minutes: number; grace_minutes: number }>(`SELECT
+        extract(epoch FROM (expires_at - created_at)) / 60 AS hold_minutes,
+        extract(epoch FROM (payment_link_expires_at - created_at)) / 60 AS link_minutes,
+        extract(epoch FROM (expires_at - payment_link_expires_at)) / 60 AS grace_minutes
+        FROM reservations WHERE id=$1`, [result.id])).rows[0];
+      assert.equal(Number(timing.hold_minutes), 15);
+      assert.equal(Number(timing.link_minutes), 10);
+      assert.equal(Number(timing.grace_minutes), 5);
       links.get(booking.payment_link_id!)!.approved = true;
       const verified = await service.reconcilePayment(result.id);
       assert.equal(verified.status, "confirmed");
@@ -1488,7 +1528,7 @@ test("reservations, payments, iCal and private administration", async (t) => {
       assert(!html.includes("Private Foreign Guest")); assert(!html.includes("guest@example.com"));
       assert(!html.includes('href="mailto:')); assert(!html.includes(">Liberar fechas<"));
     });
-    await t.test("a paid single-use cancellation is verified as consumed, not falsely closed or retried forever", async () => {
+    await t.test("a paid live Just Once cancellation is verified as consumed, not falsely closed or retried forever", async () => {
       const { cancelLocalReservation } = await import("../src/lib/admin-cancellation");
       const { GET: status } = await import("../src/app/api/reservations/[id]/route");
       const created = await service.startReservation(payload("2032-01-01", "2032-01-02"), null, "https://fixture.netlify.app");
@@ -1497,7 +1537,9 @@ test("reservations, payments, iCal and private administration", async (t) => {
       await service.reconcilePayment(created.id);
       const beforeClose = closedLinks, beforePayments = createdPayments, beforeEmails = emailCalls;
       try {
-        linkTypeFixture = "Single use"; closeLinkFailure = true;
+        // Reproduce the exact live label: deletion of this paid link is rejected,
+        // but authenticating its single approved payment must resolve the warning.
+        linkTypeFixture = "Just Once"; closeFixture = "bad-request";
         const result = await cancelLocalReservation(created.id, { dome: "domo-amplio", reason: "Anulación de reserva pagada", acknowledged: true, acknowledgeNoRefund: true }, "owner");
         assert(!result.warning.includes("No se pudo cerrar"));
         const row = (await db.getBooking(created.id))!;
@@ -1517,7 +1559,46 @@ test("reservations, payments, iCal and private administration", async (t) => {
         const publicBody = await publicResult.text();
         for (const field of ["paymentLink", "payment_link", "diagnostic", "fixture-password"]) assert(!publicBody.includes(field));
         assert(!((await exportIcs()).includes(createHash("sha256").update(row.id).digest("hex"))));
-      } finally { linkTypeFixture = undefined; closeLinkFailure = false; }
+      } finally { linkTypeFixture = undefined; closeLinkFailure = false; closeFixture = "normal"; }
+    });
+    await t.test("a cancelled paid link with an old HTTP 400 recovers after recognizing live Just Once", async () => {
+      const { cancelLocalReservation } = await import("../src/lib/admin-cancellation");
+      const created = await service.startReservation(payload("2036-02-01", "2036-02-02"), null, "https://fixture.netlify.app");
+      links.get((await db.getBooking(created.id))!.payment_link_id!)!.approved = true;
+      await service.reconcilePayment(created.id);
+      const originalLog = console.error; console.error = () => {};
+      try {
+        // Recreate the old warning without inferring that an unknown link is safe.
+        linkTypeFixture = undefined; closeFixture = "bad-request";
+        await cancelLocalReservation(created.id, { dome: "domo-amplio", reason: "Anulación acordada",
+          acknowledged: true, acknowledgeNoRefund: true }, "owner");
+        const failed = (await db.getBooking(created.id))!;
+        assert.equal(failed.payment_link_error?.upstreamStatus, 400);
+        assert.equal(failed.payment_link_consumed_at, null); assert.equal(failed.payment_link_closed_at, null);
+        await sql.query("UPDATE reservations SET payment_link_checked_at=now()-interval '3 minutes' WHERE id=$1", [created.id]);
+        const before = [createdPayments, closedLinks, emailCalls];
+        linkTypeFixture = "Just Once";
+        await payments.closeInactivePaymentLink((await db.getBooking(created.id))!);
+        const recovered = (await db.getBooking(created.id))!;
+        assert(recovered.payment_link_consumed_at); assert.equal(recovered.payment_link_error, null);
+        assert.equal(recovered.payment_link_closed_at, null); assert.equal(recovered.status, "cancelled");
+        assert.equal(recovered.amount_cents, failed.amount_cents); assert.equal(recovered.payment_reference, failed.payment_reference);
+        assert.equal(recovered.cancelled_at?.valueOf(), failed.cancelled_at?.valueOf());
+        assert.deepEqual([createdPayments, closedLinks, emailCalls], before);
+        const view = await manual.adminCalendar("domo-amplio", "2036-02-01", "2036-03-01", false);
+        const row = view.reservations.find(item => item.id === created.id)!;
+        assert.equal(row.paymentLinkPending, false); assert.equal(row.paymentLinkState, "consumed");
+        assert.equal(row.paymentLinkDiagnostic, null);
+        const { createElement } = await import("react");
+        const { renderToStaticMarkup } = await import("react-dom/server");
+        const { AdminPaymentLinkStatus } = await import("../src/components/admin/AdminPaymentLinkStatus");
+        const html = renderToStaticMarkup(createElement(AdminPaymentLinkStatus, { row, environment: "Test" }));
+        assert(html.includes("pago verificado y uso consumido")); assert(!html.includes("No se pudo"));
+        assert(!html.includes("Información para soporte")); assert(!html.includes("bg-amber-50"));
+        const details = detailCalls;
+        await payments.closeInactivePaymentLink(recovered);
+        assert.equal(detailCalls, details, "Resolved links must not be retried forever.");
+      } finally { console.error = originalLog; linkTypeFixture = undefined; closeFixture = "normal"; }
     });
     await t.test("unlimited or unknown links are never inferred consumed from a previously confirmed reservation", async () => {
       const { cancelLocalReservation } = await import("../src/lib/admin-cancellation");
@@ -1844,12 +1925,12 @@ test("reservations, payments, iCal and private administration", async (t) => {
         const beforeClose = closedLinks;
         closeLinkFailure = true;
         assert.equal((await run()).failures, 1);
-        assert.equal(detailCalls, beforeDetails);
+        assert.equal(detailCalls, beforeDetails + 1, "Closure first preserves authenticated payment identities.");
         assert.equal((await db.getBooking(incident.id))!.payment_link_closed_at, null);
         closeLinkFailure = false;
         await sql.query("UPDATE reservations SET payment_link_checked_at = now() - interval '3 minutes' WHERE id = $1", [incident.id]);
         assert.equal((await run()).failures, 0);
-        assert.equal(detailCalls, beforeDetails);
+        assert.equal(detailCalls, beforeDetails + 2);
         assert.equal(closedLinks, beforeClose + 2);
         assert((await db.getBooking(incident.id))!.payment_link_closed_at);
         assert((await db.getBooking(incident.id))!.payment_issue, "The owner must still see the incident.");
@@ -1868,7 +1949,7 @@ test("reservations, payments, iCal and private administration", async (t) => {
         await sql.query("UPDATE reservations SET created_at = now() - interval '8 days' WHERE id = $1", [old.id]);
         const beforeOldDetails = detailCalls;
         await run();
-        assert.equal(detailCalls, beforeOldDetails);
+        assert.equal(detailCalls, beforeOldDetails + 1);
         assert((await db.getBooking(old.id))!.payment_link_closed_at);
         assert.equal((await run()).checked, 0);
 
@@ -1909,12 +1990,258 @@ test("reservations, payments, iCal and private administration", async (t) => {
         const consumedDetails = detailCalls;
         assert.equal((await run()).checked, 0); assert.equal(detailCalls, consumedDetails);
         linkTypeFixture = undefined;
-        assert(readFileSync("netlify/functions/reconcile-reservations.mts", "utf8").includes('schedule: "*/15 * * * *"'));
+        assert(readFileSync("netlify/functions/reconcile-reservations.mts", "utf8").includes('schedule: "*/5 * * * *"'));
       } finally {
         console.error = originalLog; smtpFailedAudience = null; closeLinkFailure = false; linkTypeFixture = undefined;
         for (const [key, value] of [["BOOKING_RECONCILE_ENABLED", savedEnabled], ["BOOKING_RECONCILE_SECRET", savedSecret]]) {
           if (value === undefined) delete process.env[key!]; else process.env[key!] = value;
         }
+      }
+    });
+    await t.test("pending links close at their own deadline, never early, without releasing the 15-minute hold", async () => {
+      await sql.exec("TRUNCATE reservations CASCADE");
+      const created = await service.startReservation(payload("2037-01-01", "2037-01-02"), null, "https://fixture.netlify.app");
+      const original = (await db.getBooking(created.id))!;
+      const before = closedLinks;
+      await payments.closeInactivePaymentLink(original);
+      assert.equal(closedLinks, before);
+      assert.equal((await db.getBooking(created.id))!.payment_link_checked_at, null);
+      await sql.query("UPDATE reservations SET payment_link_expires_at = now() - interval '1 second' WHERE id=$1", [created.id]);
+      // Eligibility must be read atomically from the DB, not trusted from a stale caller.
+      await Promise.all([payments.closeInactivePaymentLink(original), payments.closeInactivePaymentLink(original)]);
+      const closed = (await db.getBooking(created.id))!;
+      assert.equal(closedLinks, before + 1);
+      assert(closed.payment_link_closed_at);
+      assert.equal(closed.status, "pending");
+      assert.equal(closed.expires_at!.valueOf(), original.expires_at!.valueOf());
+      assert((await db.getLocalBlocked("domo-amplio")).some((range) => range.start === "2037-01-01"));
+      assert.equal((await sql.query("SELECT night FROM reservation_nights WHERE reservation_id=$1", [created.id])).rows.length, 1);
+      assert(!(await exportIcs()).includes("20370101"));
+      await assert.rejects(service.startReservation(payload("2037-01-01", "2037-01-02"), null, "https://fixture.netlify.app"), { status: 409 });
+      await payments.closeInactivePaymentLink(original);
+      assert.equal(closedLinks, before + 1);
+      // Availability stops blocking at the hold deadline even without the scheduled job.
+      await sql.query("UPDATE reservations SET expires_at = now() - interval '1 second' WHERE id=$1", [created.id]);
+      assert(!(await db.getLocalBlocked("domo-amplio")).some((range) => range.start === "2037-01-01"));
+      const replacement = await service.startReservation(payload("2037-01-01", "2037-01-02"), null, "https://fixture.netlify.app");
+      assert.equal((await db.getBooking(created.id))!.status, "expired");
+      links.get(original.payment_link_id!)!.approved = true;
+      await assert.rejects(service.reconcilePayment(created.id), { status: 409 });
+      assert.equal((await db.getBooking(created.id))!.status, "expired");
+      assert.equal((await db.getBooking(replacement.id))!.status, "pending");
+    });
+    await t.test("legacy links keep their original deadline and confirmed bookings are never closed by the new timeout", async () => {
+      await sql.exec("TRUNCATE reservations CASCADE");
+      const created = await service.startReservation(payload("2037-02-01", "2037-02-02"), null, "https://fixture.netlify.app");
+      await sql.query(`UPDATE reservations SET payment_link_expires_at=NULL, created_at=now()-interval '20 minutes',
+        expires_at=now()+interval '10 minutes' WHERE id=$1`, [created.id]);
+      const before = closedLinks;
+      await payments.closeInactivePaymentLink((await db.getBooking(created.id))!);
+      assert.equal(closedLinks, before, "Do not retroactively shorten legacy 30-minute holds or links.");
+      await sql.query("UPDATE reservations SET expires_at=now()-interval '1 second' WHERE id=$1", [created.id]);
+      await payments.closeInactivePaymentLink((await db.getBooking(created.id))!);
+      assert.equal(closedLinks, before + 1);
+
+      const paid = await service.startReservation(payload("2037-02-03", "2037-02-04"), null, "https://fixture.netlify.app");
+      const stale = (await db.getBooking(paid.id))!;
+      await sql.query("UPDATE reservations SET payment_link_expires_at=now()-interval '1 second' WHERE id=$1", [paid.id]);
+      links.get(stale.payment_link_id!)!.approved = true;
+      assert.equal((await service.reconcilePayment(paid.id)).status, "confirmed");
+      await payments.closeInactivePaymentLink(stale);
+      assert.equal(closedLinks, before + 1, "The atomic claim must reject a now-confirmed row.");
+      assert((await db.getLocalBlocked("domo-amplio")).some((range) => range.start === "2037-02-03"));
+    });
+    await t.test("the five-minute worker verifies payments before closure and retries failures independently of holds", async () => {
+      await sql.exec("TRUNCATE reservations CASCADE");
+      const worker = await import("../src/app/api/internal/reconcile/route");
+      const savedEnabled = process.env.BOOKING_RECONCILE_ENABLED;
+      const savedSecret = process.env.BOOKING_RECONCILE_SECRET;
+      const oldLog = console.error;
+      const secret = "fixture-timeout-reconciliation-".repeat(2);
+      const run = async () => {
+        const response = await worker.POST(new Request("http://localhost/api/internal/reconcile", {
+          method: "POST", headers: { "x-reconcile-secret": secret },
+        }));
+        assert.equal(response.status, 200);
+        return response.json() as Promise<{ failures: number }>;
+      };
+      try {
+        process.env.BOOKING_RECONCILE_ENABLED = "true";
+        process.env.BOOKING_RECONCILE_SECRET = secret;
+        console.error = () => {};
+        const created = await service.startReservation(payload("2037-03-01", "2037-03-02"), null, "https://fixture.netlify.app");
+        const before = closedLinks;
+        await run(); assert.equal(closedLinks, before);
+        await sql.query("UPDATE reservations SET payment_link_expires_at=now()-interval '1 second' WHERE id=$1", [created.id]);
+        closeLinkFailure = true;
+        assert.equal((await run()).failures, 1);
+        const failed = (await db.getBooking(created.id))!;
+        assert.equal(failed.status, "pending"); assert.equal(failed.payment_link_closed_at, null);
+        assert(failed.payment_link_error); assert(failed.expires_at!.valueOf() > Date.now());
+        closeLinkFailure = false;
+        await run(); assert.equal(closedLinks, before + 1, "Retries are throttled, not repeated immediately.");
+        await sql.query("UPDATE reservations SET payment_link_checked_at=now()-interval '3 minutes' WHERE id=$1", [created.id]);
+        links.get(failed.payment_link_id!)!.processing = true;
+        transactionFixture = "invalid_response"; // Once identity is preserved, a failed transaction lookup need not prevent closure.
+        assert.equal((await run()).failures, 1);
+        const recovered = (await db.getBooking(created.id))!;
+        assert(recovered.payment_link_closed_at); assert.equal(recovered.payment_link_error, null);
+        assert.equal(recovered.status, "pending");
+        assert.equal(recovered.expires_at!.valueOf(), failed.expires_at!.valueOf());
+        transactionFixture = "success";
+        const paid = await service.startReservation(payload("2037-03-03", "2037-03-04"), null, "https://fixture.netlify.app");
+        await sql.query(`UPDATE reservations SET payment_link_expires_at=now()-interval '4 minutes',
+          expires_at=now()+interval '1 minute' WHERE id=$1`, [paid.id]);
+        links.get((await db.getBooking(paid.id))!.payment_link_id!)!.approved = true;
+        const beforePaid = closedLinks;
+        await run();
+        assert.equal((await db.getBooking(paid.id))!.status, "confirmed");
+        assert.equal(closedLinks, beforePaid, "A verified payment within the grace period must not be cancelled.");
+
+        // Deleted links can stop supplying detail. Failed provider reads must
+        // not keep the DB row pending forever after its 15-minute hold elapses.
+        unavailableLinkIds.add(recovered.payment_link_id!);
+        await sql.query("UPDATE reservations SET expires_at=now()-interval '1 second' WHERE id=$1", [created.id]);
+        assert.equal((await run()).failures, 1);
+        assert.equal((await db.getBooking(created.id))!.status, "expired");
+        assert.equal((await sql.query("SELECT night FROM reservation_nights WHERE reservation_id=$1", [created.id])).rows.length, 0);
+        assert.equal((await db.getBooking(paid.id))!.status, "confirmed");
+      } finally {
+        console.error = oldLog; closeLinkFailure = false; detailFixture = "live"; transactionFixture = "success"; unavailableLinkIds.clear();
+        if (savedEnabled === undefined) delete process.env.BOOKING_RECONCILE_ENABLED; else process.env.BOOKING_RECONCILE_ENABLED = savedEnabled;
+        if (savedSecret === undefined) delete process.env.BOOKING_RECONCILE_SECRET; else process.env.BOOKING_RECONCILE_SECRET = savedSecret;
+      }
+    });
+    await t.test("an authenticated in-progress transaction remains verifiable after link detail disappears", async () => {
+      await sql.exec("TRUNCATE reservations CASCADE");
+      const created = await service.startReservation(payload("2038-01-01", "2038-01-02"), null, "https://fixture.netlify.app");
+      const booking = (await db.getBooking(created.id))!;
+      const link = links.get(booking.payment_link_id!)!;
+      link.processing = true;
+      assert.equal((await service.reconcilePayment(created.id)).status, "pending");
+      await sql.query("UPDATE reservations SET payment_link_expires_at=now()-interval '1 second' WHERE id=$1", [created.id]);
+      await payments.closeInactivePaymentLink((await db.getBooking(created.id))!);
+      assert((await db.getBooking(created.id))!.payment_link_closed_at);
+      unavailableLinkIds.add(booking.payment_link_id!);
+      link.approved = true;
+      try {
+        const before = emailCalls;
+        assert.equal((await service.reconcilePayment(created.id)).status, "confirmed");
+        assert.equal((await db.getBooking(created.id))!.payment_verification_error, null);
+        assert.equal(emailCalls, before + 2);
+        assert((await exportIcs()).includes("20380101"));
+      } finally { unavailableLinkIds.clear(); }
+    });
+    await t.test("a remembered charge approved after its hold expires never takes replacement nights", async () => {
+      await sql.exec("TRUNCATE reservations CASCADE");
+      const created = await service.startReservation(payload("2038-02-01", "2038-02-02"), null, "https://fixture.netlify.app");
+      const booking = (await db.getBooking(created.id))!;
+      const link = links.get(booking.payment_link_id!)!;
+      link.processing = true;
+      await sql.query("UPDATE reservations SET payment_link_expires_at=now()-interval '1 second' WHERE id=$1", [created.id]);
+      await payments.closeInactivePaymentLink((await db.getBooking(created.id))!);
+      unavailableLinkIds.add(booking.payment_link_id!);
+      try {
+        await sql.query("UPDATE reservations SET expires_at=now()-interval '1 second' WHERE id=$1", [created.id]);
+        const replacement = await service.startReservation(payload("2038-02-01", "2038-02-02"), null, "https://fixture.netlify.app");
+        link.approved = true;
+        const before = emailCalls;
+        await assert.rejects(service.reconcilePayment(created.id), { status: 409 });
+        const expired = (await db.getBooking(created.id))!;
+        assert.equal(expired.status, "expired"); assert(expired.payment_issue);
+        assert.equal(emailCalls, before); assert(!(await exportIcs()).includes("20380201"));
+        assert.equal((await sql.query<{ reservation_id: string }>("SELECT reservation_id FROM reservation_nights WHERE night='2038-02-01'")).rows[0].reservation_id, replacement.id);
+      } finally { unavailableLinkIds.clear(); }
+    });
+    await t.test("missing detail without authenticated evidence stays unknown and visible even for a closed link", async () => {
+      await sql.exec("TRUNCATE reservations CASCADE");
+      const created = await service.startReservation(payload("2038-03-01", "2038-03-02"), null, "https://fixture.netlify.app");
+      const booking = (await db.getBooking(created.id))!;
+      unavailableLinkIds.add(booking.payment_link_id!);
+      const oldLog = console.error; console.error = () => {};
+      try {
+        const before = closedLinks;
+        await sql.query("UPDATE reservations SET payment_link_expires_at=now()-interval '1 second' WHERE id=$1", [created.id]);
+        await assert.rejects(payments.closeInactivePaymentLink((await db.getBooking(created.id))!), { upstreamStatus: 400 });
+        assert.equal(closedLinks, before, "Do not erase the only payment lookup while verification fails.");
+        await sql.query("UPDATE reservations SET payment_link_closed_at=now() WHERE id=$1", [created.id]);
+        links.get(booking.payment_link_id!)!.approved = true;
+        await assert.rejects(service.reconcilePayment(created.id), { upstreamStatus: 400 });
+        const unknown = (await db.getBooking(created.id))!;
+        assert.equal(unknown.status, "pending"); assert.equal(unknown.payment_issue, null);
+        assert.equal(unknown.payment_verification_error?.upstreamStatus, 400);
+        const admin = await manual.adminCalendar("domo-amplio", "2039-01-01", "2039-02-01", false);
+        assert(admin.issues.some((row) => row.id === created.id && row.paymentVerificationDiagnostic));
+        const { createElement } = await import("react");
+        const { renderToStaticMarkup } = await import("react-dom/server");
+        const { AdminPaymentVerificationStatus } = await import("../src/components/admin/AdminPaymentVerificationStatus");
+        const html = renderToStaticMarkup(createElement(AdminPaymentVerificationStatus, { row: admin.issues[0] }));
+        assert(html.includes("Pago sin verificar")); assert(html.includes("no demuestra que haya un cobro"));
+        const publicApi = await import("../src/app/api/reservations/[id]/route");
+        const response = await publicApi.GET(new Request("http://localhost"), { params: Promise.resolve({ id: created.id }) });
+        const publicText = await response.text();
+        assert.equal(response.status, 503); assert(!publicText.includes("payment_verification_error"));
+        assert(!publicText.includes(unknown.payment_verification_error!.reference));
+        unavailableLinkIds.clear();
+        await service.reconcilePayment(created.id);
+        assert.equal((await db.getBooking(created.id))!.payment_verification_error, null);
+      } finally { unavailableLinkIds.clear(); console.error = oldLog; }
+    });
+    await t.test("paid late Just Once links become consumed while the payment incident remains open", async () => {
+      await sql.exec("TRUNCATE reservations CASCADE");
+      const created = await service.startReservation(payload("2038-04-01", "2038-04-02"), null, "https://fixture.netlify.app");
+      await db.expireBooking(created.id);
+      links.get((await db.getBooking(created.id))!.payment_link_id!)!.approved = true;
+      linkTypeFixture = "Just Once";
+      const before = closedLinks;
+      try {
+        await payments.closeInactivePaymentLink((await db.getBooking(created.id))!);
+        const current = (await db.getBooking(created.id))!;
+        assert.equal(current.status, "expired"); assert(current.payment_link_consumed_at);
+        assert.equal(current.payment_link_closed_at, null); assert(current.payment_issue?.includes("sin bloqueo vigente"));
+        assert.equal(closedLinks, before);
+        await payments.closeInactivePaymentLink(current); assert.equal(closedLinks, before);
+        assert.equal((await sql.query("SELECT night FROM reservation_nights WHERE reservation_id=$1", [created.id])).rows.length, 0);
+        // Older versions used a different message for this same late charge.
+        // Link cleanup must preserve that exact incident and its resolution.
+        const historicalIssue = "Pago aprobado después del vencimiento. Requiere gestión inmediata y posible reembolso.";
+        await sql.query(`UPDATE reservations SET payment_issue=$2, payment_link_consumed_at=NULL,
+          payment_link_checked_at=now()-interval '3 minutes' WHERE id=$1`, [created.id, historicalIssue]);
+        const { resolvePaymentIssue } = await import("../src/lib/admin-payment-issues");
+        await resolvePaymentIssue(created.id, { dome: "domo-amplio", issue: historicalIssue,
+          note: "Revisión ficticia completada", acknowledged: true }, "owner");
+        await payments.closeInactivePaymentLink((await db.getBooking(created.id))!);
+        assert.equal((await db.getBooking(created.id))!.payment_issue, historicalIssue);
+        assert(!(await manual.adminCalendar("domo-amplio", "2038-04-01", "2038-05-01", false)).issues.some((row) => row.id === created.id));
+      } finally { linkTypeFixture = undefined; }
+    });
+    await t.test("worker rotates payment verification even when link-closure timestamps differ", async () => {
+      await sql.exec("TRUNCATE reservations CASCADE");
+      const worker = await import("../src/app/api/internal/reconcile/route");
+      const savedEnabled = process.env.BOOKING_RECONCILE_ENABLED, savedSecret = process.env.BOOKING_RECONCILE_SECRET;
+      const oldLog = console.error; console.error = () => {};
+      try {
+        const ids: string[] = [];
+        for (let index = 1; index <= 22; index++) {
+          const day = String(index).padStart(2, "0"), next = String(index + 1).padStart(2, "0");
+          const created = await service.startReservation(payload(`2038-05-${day}`, `2038-05-${next}`), null, "https://fixture.netlify.app");
+          ids.push(created.id);
+        }
+        await sql.query(`UPDATE reservations SET payment_link_closed_at=now(),
+          payment_link_checked_at=created_at + (row_number * interval '1 second')
+          FROM (SELECT id AS booking_id, row_number() OVER (ORDER BY created_at) FROM reservations) ordered
+          WHERE id=booking_id`);
+        process.env.BOOKING_RECONCILE_ENABLED = "true";
+        process.env.BOOKING_RECONCILE_SECRET = "fixture-rotation-worker-secret-1234567890";
+        const run = () => worker.POST(new Request("http://localhost/api/internal/reconcile", { method: "POST",
+          headers: { "x-reconcile-secret": process.env.BOOKING_RECONCILE_SECRET! } }));
+        await run(); await run();
+        const { rows } = await sql.query<{ count: number }>("SELECT count(*)::int AS count FROM reservations WHERE payment_checked_at IS NOT NULL");
+        assert.equal(rows[0].count, ids.length, "Previously checked links must not starve the next records.");
+      } finally {
+        console.error = oldLog;
+        if (savedEnabled === undefined) delete process.env.BOOKING_RECONCILE_ENABLED; else process.env.BOOKING_RECONCILE_ENABLED = savedEnabled;
+        if (savedSecret === undefined) delete process.env.BOOKING_RECONCILE_SECRET; else process.env.BOOKING_RECONCILE_SECRET = savedSecret;
       }
     });
     await t.test("scheduled function exposes safe failure summaries without leaking provider data", async () => {

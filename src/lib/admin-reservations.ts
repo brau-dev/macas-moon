@@ -29,10 +29,13 @@ export async function adminCalendar(dome: string, start: string, end: string, re
         FROM payment_issue_resolutions resolution WHERE resolution.reservation_id = reservations.id
           AND resolution.issue = reservations.payment_issue) AS issue_resolution FROM reservations
       WHERE dome = $1 AND check_in < $3::date AND check_out > $2::date ORDER BY check_in, created_at`, [dome, start, end]),
-    getPool().query<Booking>(`SELECT ${bookingColumns} FROM reservations
-      WHERE dome = $1 AND payment_issue IS NOT NULL
+    getPool().query<AdminBooking>(`SELECT ${bookingColumns},
+      (SELECT json_build_object('resolvedAt', resolution.resolved_at, 'resolvedBy', resolution.resolved_by, 'note', resolution.note)
+        FROM payment_issue_resolutions resolution WHERE resolution.reservation_id = reservations.id
+          AND resolution.issue = reservations.payment_issue) AS issue_resolution FROM reservations
+      WHERE dome = $1 AND (payment_verification_error IS NOT NULL OR (payment_issue IS NOT NULL
         AND NOT EXISTS (SELECT 1 FROM payment_issue_resolutions resolution
-          WHERE resolution.reservation_id = reservations.id AND resolution.issue = reservations.payment_issue)
+          WHERE resolution.reservation_id = reservations.id AND resolution.issue = reservations.payment_issue)))
       ORDER BY created_at DESC LIMIT 50`, [dome]),
     adminPrices(dome, start, end),
   ]);
@@ -58,7 +61,8 @@ export async function adminCalendar(dome: string, start: string, end: string, re
     paymentLinkState: row.payment_provider !== "tilopay" || !["cancelled", "expired"].includes(row.status) || !row.payment_link_id ? null
       : row.payment_link_closed_at ? "closed" as const : row.payment_link_consumed_at ? "consumed" as const : "pending" as const,
     paymentLinkCheckedAt: row.payment_link_checked_at?.toISOString() ?? null,
-    paymentLinkDiagnostic: row.payment_link_error });
+    paymentLinkDiagnostic: row.payment_link_error,
+    paymentVerificationDiagnostic: row.payment_verification_error });
   return { dome, pricing, bookingEnabled: isDomeActive(dome), reservations: reservations.rows.map(expose), issues: issues.rows.map(expose),
     imported: imported.map((source) => ({ ...source,
       blocked: source.blocked.filter((range) => range.start < end && range.end > start) })),
