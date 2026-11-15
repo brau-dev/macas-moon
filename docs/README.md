@@ -96,10 +96,9 @@ Una conversación de WhatsApp no bloquea noches por sí sola.
 
 ## Estado y condiciones para lanzar
 
-**Última validación del código, 23 de octubre de 2026:** 94 pruebas, lint,
-TypeScript y compilación. En la reorganización documental se comprobaron enlaces,
-se repitió la auditoría de exposición sin hallazgos y pasaron 29 comprobaciones HTTP
-aisladas. Las pruebas utilizan PostgreSQL embebido y proveedores simulados;
+**Última validación local, 15 de noviembre de 2026:** 98 pruebas, lint,
+TypeScript, compilación, auditoría de exposición sin hallazgos y comprobaciones
+HTTP aisladas. Las pruebas utilizan PostgreSQL embebido y proveedores simulados;
 no certifican el comercio publicado, entrega real de correo ni liquidación bancaria.
 La simulación de concurrencia no reproduce todos los bloqueos de PostgreSQL remoto.
 
@@ -108,10 +107,13 @@ no está comprobada. La 0010 conserva identidades obtenidas del detalle autentic
 de cada enlace para verificar transacciones aunque ese detalle desaparezca con
 HTTP 400/404. No reconstruye identidades de enlaces eliminados anteriormente.
 
-**Pendiente crítico:** si un pago está en proceso y todavía no aparece en el detalle
-al eliminar el enlace, no hay identidad autenticada que conservar. Hace falta
-verificar con Tilopay una vía fiable de recuperación antes de vender. Esperar
-cinco minutos o confiar en el webhook no resuelve esa vinculación.
+**Pagos tardíos: gestión manual acordada.** Cuando se verifica un cobro aprobado
+sin bloqueo vigente, se registra una incidencia en el panel. El administrador
+revisa el cobro; las noches no se recuperan automáticamente.
+El caso de una transacción aún no identificada al eliminar el enlace sigue pendiente
+de validación: sin una identidad verificable no puede garantizarse una alerta de
+cobro. No se han observado demoras superiores a cinco minutos de Tilopay en estas
+pruebas ni se encontró una garantía pública sobre los pagos que siguen en proceso.
 La documentación de [webhooks](https://tilopay.com/developers/api/webhooks) indica
 un solo intento para compras y remite a soporte para el algoritmo de `orderHash`.
 No se ha implementado una firma supuesta ni contactado al proveedor.
@@ -124,15 +126,17 @@ especiales y total desactualizado, anulación, bloqueo parcial y resolución de
 incidencias con historial. Probar también móvil, idiomas y billeteras habilitadas
 por el comercio; la web no activa Apple Pay/Google Pay por sí sola.
 
+Se añadieron condiciones y privacidad, aceptación registrada y política unificada
+de noches confirmadas no reembolsables. La migración **0012** añade el registro de
+aceptación; debe aplicarse si está pendiente al desplegar.
+Los enlaces y el formulario de contacto por WhatsApp siguen disponibles.
+
 Antes de ventas reales también faltan:
 
-- Aprobar políticas, impuestos, cargos y tratamiento del pago tardío. La FAQ dice
-  «no reembolsables» y exige un mes para cancelar; las reglas piden consultar al
-  anfitrión. Los dueños deben unificar esos textos.
-- Aprobar la información de privacidad, conservación y atención al huésped;
-  no se encontró una página específica en las rutas revisadas.
-- Definir responsables y alertas para incidencias, fallos del respaldo y correo;
-  los avisos del panel y logs no prueban que exista una alerta externa.
+- Completar la dirección comercial del responsable Christian Salazar en privacidad
+  y revisar el texto final, impuestos y cargos antes de publicarlo para ventas reales.
+- Mantener un responsable que atienda incidencias en el panel y revise los fallos
+  del respaldo y del correo.
 - Comprobar carga y recuperación ante caídas: los lotes de pagos y correos comparten
   presupuesto de tiempo, sin garantía de atención dentro de 15 minutos.
 - Verificar retención de respaldos y restaurar una copia en una base aislada.

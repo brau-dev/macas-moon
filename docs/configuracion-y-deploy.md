@@ -103,8 +103,9 @@ eludir un hallazgo. Si se expuso una credencial, rotarla y revisar el historial.
 La base real es PostgreSQL. `netlify/database/migrations/` contiene instrucciones
 SQL para el sistema nativo de Netlify; `db/` mantiene copias para aplicación manual.
 No son dos bases ni archivos con las reservas. En una base nueva aplicar en orden
-**0001 a 0010**; en una existente, solo las pendientes, sin borrar tablas o datos.
-Para instalación manual usar los archivos equivalentes `001` a `010` de `db/`.
+**0001 a 0010 y 0012**; en una existente, solo las pendientes.
+Para instalación manual usar los archivos equivalentes `001` a `010` y `012` de `db/`.
+La numeración conserva un salto porque se retiró una integración que no se desplegó.
 
 | Migraciones | Qué incorporan |
 | --- | --- |
@@ -112,6 +113,7 @@ Para instalación manual usar los archivos equivalentes `001` a `010` de `db/`.
 | 0004–0006 | Anulaciones, diagnóstico/consumo de enlaces y entorno histórico del pago. |
 | 0007–0008 | Precios por fecha e historial de resolución de incidencias. |
 | 0009–0010 | Vencimiento separado del enlace, identidades de intentos y errores de verificación. |
+| 0012 | Versión y fecha de aceptación de condiciones y privacidad. |
 
 Comprobar la aplicación en el registro de despliegue y en la base correspondiente;
 compilar no demuestra que estén aplicadas. La 0006 identifica como Test el historial
@@ -150,8 +152,9 @@ la importación iCal usa caché por instancia, y al reservar se fuerza una lectu
 
 ## Cobros reales: solo con autorización expresa
 
-Primero resolver el pendiente de seguimiento de pagos de la [guía del proyecto](README.md),
-completar aceptación, políticas, privacidad, alertas y restauración de respaldos.
+Primero completar las pruebas de pagos y gestión manual de incidencias de la
+[guía del proyecto](README.md), la dirección pendiente en privacidad y la
+restauración de respaldos.
 Atender enlaces e incidencias Test en su entorno original; liberar desde `/admin`
 las noches ficticias y comprobar reapertura externa conservando el historial.
 

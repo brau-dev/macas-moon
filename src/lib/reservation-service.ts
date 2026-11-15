@@ -12,6 +12,7 @@ import { overlapsBlocked } from "@/lib/availability-types";
 import { createBooking, getBooking, confirmBooking, expireBooking, recordPaymentCheck, type NewBooking } from "@/lib/booking-db";
 import { createPaymentUrl, paymentApproved, requirePaymentEnvironment } from "@/lib/tilopay";
 import { sendConfirmation } from "@/lib/booking-email";
+import { bookingPolicyVersion } from "@/data/reservation-policies";
 import { cleanField as clean, validateStay } from "@/lib/booking-validation";
 import { isResidenceCountry } from "@/lib/countries";
 import { requireCheckoutConfig } from "@/lib/checkout-config";
@@ -27,6 +28,9 @@ type BookingInput = {
 function validate(input: unknown): BookingInput {
   if (!input || typeof input !== "object") throw new BookingError("Datos de reserva inválidos.", 400);
   const value = input as Record<string, unknown>;
+  if (value.acceptedPolicies !== true || value.policyVersion !== bookingPolicyVersion) {
+    throw new BookingError("Lee y acepta las condiciones de reserva y la política de privacidad antes de continuar.", 400);
+  }
   const dome = clean(value.dome, 40);
   const selected = getDome(dome);
   if (!selected) throw new BookingError("Domo desconocido.", 400);
@@ -85,6 +89,7 @@ export async function startReservation(raw: unknown, testSecret: string | null, 
     amount_cents: amount, currency, payment_provider: test ? "test" : "tilopay",
     payment_environment: test ? "Test" : process.env.TILOPAY_EXPECTED_ENVIRONMENT as "Test" | "Production",
     payment_reference: test ? null : `MM${id.replaceAll("-", "").toUpperCase()}`,
+    policy_version: bookingPolicyVersion,
   };
   try { await createBooking(booking); }
   catch (error) {

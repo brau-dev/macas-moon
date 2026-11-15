@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { bookingPolicyVersion } from "../src/data/reservation-policies";
 import { Module } from "node:module";
 import { PGlite } from "@electric-sql/pglite";
 import { hashAdminPassword, verifyAdminPassword } from "../src/lib/admin-password.mjs";
@@ -262,6 +263,10 @@ test("reservations, payments, iCal and private administration", async (t) => {
   const paymentEvidence = readFileSync("db/010_payment_verification_evidence.sql", "utf8");
   await sql.exec(paymentEvidence); await sql.exec(paymentEvidence);
   assert.equal(paymentEvidence, readFileSync("netlify/database/migrations/0010_payment_verification_evidence.sql", "utf8"));
+  const policyConsent = readFileSync("db/012_booking_policy_consent.sql", "utf8");
+  await sql.exec(policyConsent); await sql.exec(policyConsent);
+  assert.equal(policyConsent, readFileSync("netlify/database/migrations/0012_booking_policy_consent.sql", "utf8"));
+  assert.equal((await sql.query<{ policy_accepted_at: Date | null }>("SELECT policy_accepted_at FROM reservations WHERE id=$1", [legacyId])).rows[0].policy_accepted_at, null);
 
   let queue = Promise.resolve();
   let failBookingRead = false;
@@ -477,7 +482,7 @@ test("reservations, payments, iCal and private administration", async (t) => {
     const payload = (start: string, end: string) => ({ dome: "domo-amplio", checkIn: start, checkOut: end,
       guests: 2, name: "Test Guest", email: "guest@example.com", phone: "+50688888888", country: "CR",
       expectedAmountCents: Math.round((Date.parse(end) - Date.parse(start)) / 86_400_000) * 12500,
-      turnstileToken: "fixture" });
+      turnstileToken: "fixture", acceptedPolicies: true, policyVersion: bookingPolicyVersion });
     const exportIcs = async () => (await exportRoute.GET(new Request("http://localhost/api/calendar"),
       { params: Promise.resolve({ dome: "domo-amplio" }) })).text();
 
@@ -2468,6 +2473,19 @@ test("reservations, payments, iCal and private administration", async (t) => {
         }
         await auth.logoutAdmin(); cookieValues.clear();
       }
+    });
+    await t.test("booking requires explicit current policy acceptance and stores server consent time", async () => {
+      await sql.exec("TRUNCATE reservations CASCADE");
+      const input = payload("2039-01-01", "2039-01-03");
+      for (const change of [{ acceptedPolicies: false }, { acceptedPolicies: "true" }, { acceptedPolicies: undefined },
+        { policyVersion: "old" }, { policyVersion: undefined }]) {
+        await assert.rejects(service.startReservation({ ...input, ...change }, null, "https://fixture.netlify.app"), { status: 400 });
+      }
+      assert.equal((await sql.query("SELECT id FROM reservations")).rows.length, 0);
+      const result = await service.startReservation({ ...input, policyAcceptedAt: "2000-01-01" }, null, "https://fixture.netlify.app");
+      const row = (await db.getBooking(result.id))!;
+      assert.equal(row.policy_version, bookingPolicyVersion);
+      assert(row.policy_accepted_at!.getFullYear() >= 2026);
     });
     await t.test("login rate limit is persisted in PostgreSQL", async () => {
       await sql.exec("TRUNCATE admin_login_limits");

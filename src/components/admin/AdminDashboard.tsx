@@ -343,7 +343,10 @@ export function AdminDashboard({ domes, checkout, siteOrigin }: { domes: Array<{
             <div className="flex flex-wrap gap-2">
               {row.paymentLinkPending && row.paymentEnvironment === checkout.environment ? <button className={actionClass} disabled={busy} onClick={() => mutate(`/api/admin/reservations/${row.id}`, "POST", { action: "retry-payment-link", dome: row.dome })}>Revisar enlace de pago</button> : null}
               {row.status !== "cancelled" && (row.kind === "booking" || row.status === "confirmed") ? <button className={actionClass} disabled={busy} onClick={() => releaseDates(row)}>Liberar fechas</button> : null}
-              {row.provider === "tilopay" && row.paymentEnvironment === checkout.environment && row.status !== "confirmed" && !(row.status === "cancelled" && row.cancelledFrom === "confirmed") ? <button className={actionClass} disabled={busy} onClick={() => mutate(`/api/admin/reservations/${row.id}`, "POST", { action: "reconcile" })}>Verificar pago</button> : null}
+              {row.provider === "tilopay" && row.paymentEnvironment === checkout.environment && row.status !== "confirmed" &&
+                !(row.status === "cancelled" && row.cancelledFrom === "confirmed") &&
+                (row.status === "pending" || row.paymentVerificationDiagnostic || !["closed", "consumed"].includes(row.paymentLinkState ?? "")) ?
+                <button className={actionClass} disabled={busy} onClick={() => mutate(`/api/admin/reservations/${row.id}`, "POST", { action: "reconcile" })}>Verificar pago</button> : null}
               {row.kind === "booking" && row.status === "confirmed" && (!row.emailSent || (row.ownerEmailRequired && !row.ownerEmailSent)) ? <button className={actionClass} disabled={busy} onClick={() => mutate(`/api/admin/reservations/${row.id}`, "POST", { action: "retry-email" })}>Reintentar correos pendientes</button> : null}
             </div>
           </div>

@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Script from "next/script";
+import Link from "next/link";
+import { bookingPolicyVersion, refundPolicy } from "@/data/reservation-policies";
 import { AvailabilityCalendar } from "@/components/reservar/AvailabilityCalendar";
 import { Button } from "@/components/ui/Button";
 import { domes } from "@/data/domes";
@@ -97,6 +99,7 @@ export function DirectBookingForm({ initialDome }: { initialDome?: string }) {
       guests: Number(form.get("guests")),
       name: form.get("name"), email: form.get("email"), phone: form.get("phone"),
       country: form.get("country"),
+      acceptedPolicies: form.get("acceptedPolicies") === "on", policyVersion: bookingPolicyVersion,
     };
     if (!testMode && (typeof payload.turnstileToken !== "string" || !payload.turnstileToken)) {
       setError("Espera a que termine la verificación de seguridad antes de continuar.");
@@ -197,6 +200,17 @@ export function DirectBookingForm({ initialDome }: { initialDome?: string }) {
         data-action="booking" />
     </> : null}
     {!testMode ? <p className="text-xs text-muted">Al continuar se abrirá la página segura de Tilopay en esta misma pestaña. No introduzcas los datos de tu tarjeta en este formulario.</p> : null}
+    <div className="space-y-3 rounded-2xl border border-border p-4 text-sm leading-relaxed">
+      <p>{t(refundPolicy)}</p>
+      <p className="flex flex-wrap gap-x-4 gap-y-1">
+        <Link href="/condiciones-reserva" target="_blank" rel="noopener noreferrer" className="text-olive-800 underline">{t("Condiciones de reserva")}</Link>
+        <Link href="/privacidad" target="_blank" rel="noopener noreferrer" className="text-olive-800 underline">{t("Política de privacidad")}</Link>
+      </p>
+      <label className="flex items-start gap-3">
+        <input name="acceptedPolicies" type="checkbox" required disabled={busy} className="mt-1 h-4 w-4 shrink-0 accent-olive-700" />
+        <span>{t("Acepto las condiciones de reserva y autorizo el tratamiento de mis datos según la política de privacidad.")}</span>
+      </label>
+    </div>
     {error ? <p role="alert" className="text-sm text-red-700">{error}</p> : null}
     {!testMode ? <p className="rounded-2xl bg-sand-50 p-4 text-sm leading-relaxed text-ink">
       {t("Si el pago no se completa o cancelas el proceso, las fechas pueden quedar apartadas temporalmente. Espera entre 15 y 20 minutos desde que iniciaste la solicitud y pulsa «Actualizar disponibilidad» antes de intentarlo de nuevo. Si el pago fue aprobado, no lo repitas.")}

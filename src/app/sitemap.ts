@@ -2,7 +2,7 @@ import type { MetadataRoute } from "next";
 import { domes } from "@/data/domes";
 import { siteUrl } from "@/lib/site";
 
-const staticPaths = ["/", "/nosotros", "/galeria", "/experiencias", "/servicios", "/reservar"];
+const staticPaths = ["/", "/nosotros", "/galeria", "/experiencias", "/servicios", "/reservar", "/condiciones-reserva", "/privacidad"];
 
 export default function sitemap(): MetadataRoute.Sitemap {
   return [

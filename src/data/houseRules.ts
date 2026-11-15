@@ -1,3 +1,5 @@
+import { refundPolicy } from "@/data/reservation-policies";
+
 export type HouseRule = {
   id: string;
   title: string;
@@ -38,7 +40,7 @@ export const houseRules: HouseRule[] = [
   {
     id: "cancel",
     title: "Cancelación",
-    text: "Consulta las condiciones de cancelación con el anfitrión antes de confirmar. Las solicitudes enviadas por WhatsApp no generan un cargo automático.",
+    text: refundPolicy,
   },
   {
     id: "nature",

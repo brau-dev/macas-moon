@@ -63,6 +63,8 @@ export type Booking = {
   cancellation_check_in: string | null;
   cancellation_check_out: string | null;
   parent_block_id: string | null;
+  policy_version: string | null;
+  policy_accepted_at: Date | null;
 };
 
 export const bookingColumns = `id, dome, check_in::text, check_out::text, guests, guest_name, guest_email,
@@ -73,11 +75,11 @@ export const bookingColumns = `id, dome, check_in::text, check_out::text, guests
   payment_issue, payment_checked_at, payment_verification_error,
   owner_notification_sent_at, owner_notification_required, cancelled_at, cancelled_by,
   cancellation_reason, cancelled_from_status, cancellation_check_in::text,
-  cancellation_check_out::text, parent_block_id`;
+  cancellation_check_out::text, parent_block_id, policy_version, policy_accepted_at`;
 
 export type NewBooking = Pick<Booking, "id" | "dome" | "check_in" | "check_out" | "guests" |
   "guest_name" | "guest_email" | "guest_phone" | "billing_country" | "amount_cents" |
-  "currency" | "payment_provider" | "payment_reference" | "payment_environment">;
+  "currency" | "payment_provider" | "payment_reference" | "payment_environment" | "policy_version">;
 
 export async function transaction<T>(run: (client: PoolClient) => Promise<T>) {
   const client = await getPool().connect();
@@ -120,14 +122,14 @@ export async function createBooking(booking: NewBooking) {
       (id, dome, check_in, check_out, guests, guest_name, guest_email, guest_phone,
        billing_country,
        status, amount_cents, currency, payment_provider, payment_reference, payment_environment, nightly_prices,
-       payment_link_expires_at, expires_at)
+       payment_link_expires_at, expires_at, policy_version, policy_accepted_at)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending',$10,$11,$12,$13,$14,$15::jsonb,
-        CASE WHEN $12 = 'tilopay' THEN now() + interval '10 minutes' END, now() + interval '15 minutes')`,
+        CASE WHEN $12 = 'tilopay' THEN now() + interval '10 minutes' END, now() + interval '15 minutes', $16, now())`,
       [booking.id, booking.dome, booking.check_in, booking.check_out, booking.guests,
         booking.guest_name, booking.guest_email, booking.guest_phone,
         booking.billing_country, booking.amount_cents,
         booking.currency, booking.payment_provider, booking.payment_reference, booking.payment_environment,
-        JSON.stringify(pricing.nights)]);
+        JSON.stringify(pricing.nights), booking.policy_version]);
     await client.query(`INSERT INTO reservation_nights (reservation_id, dome, night)
       SELECT $1, $2, day::date FROM generate_series($3::date, $4::date - 1, interval '1 day') day`,
       [booking.id, booking.dome, booking.check_in, booking.check_out]);

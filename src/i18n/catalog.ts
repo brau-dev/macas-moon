@@ -1,3 +1,5 @@
+import { policyTranslations } from "@/i18n/policies";
+
 export type Translation = {
   en: string;
   fr: string;
@@ -5,6 +7,7 @@ export type Translation = {
 };
 
 export const catalog: Record<string, Translation> = {
+  ...policyTranslations,
   "Si el pago no se completa o cancelas el proceso, las fechas pueden quedar apartadas temporalmente. Espera entre 15 y 20 minutos desde que iniciaste la solicitud y pulsa «Actualizar disponibilidad» antes de intentarlo de nuevo. Si el pago fue aprobado, no lo repitas.": {
     en: "If payment is not completed or you cancel the process, your dates may remain temporarily held. Wait 15–20 minutes from when you started the booking request, then select ‘Actualizar disponibilidad’ (Refresh availability) before trying again. If your payment was approved, do not pay again.",
     fr: "Si le paiement n’aboutit pas ou si vous annulez la procédure, les dates peuvent rester temporairement bloquées. Attendez 15 à 20 minutes après le début de votre demande, puis appuyez sur « Actualizar disponibilidad » (Actualiser les disponibilités) avant de réessayer. Si votre paiement a été approuvé, ne payez pas à nouveau.",
@@ -38,7 +41,6 @@ export const catalog: Record<string, Translation> = {
   "¿Qué métodos de pago aceptan?": { en: "What payment methods do you accept?", fr: "Quels moyens de paiement acceptez-vous ?", de: "Welche Zahlungsmethoden akzeptieren Sie?" },
   "Por ahora no procesamos pagos en esta página. Escríbenos por WhatsApp para consultar los métodos de pago disponibles y confirmar tu reserva.": { en: "We do not currently process payments on this website. Message us on WhatsApp to ask about available payment methods and confirm your booking.", fr: "Nous ne traitons pas encore les paiements sur ce site. Écrivez-nous sur WhatsApp pour connaître les moyens de paiement disponibles et confirmer votre réservation.", de: "Derzeit verarbeiten wir auf dieser Website keine Zahlungen. Schreiben Sie uns über WhatsApp, um Zahlungsmöglichkeiten zu erfragen und Ihre Buchung zu bestätigen." },
   "¿Cuál es la política de cancelación y reembolso?": { en: "What is the cancellation and refund policy?", fr: "Quelle est la politique d’annulation et de remboursement ?", de: "Wie lautet die Stornierungs- und Rückerstattungsrichtlinie?" },
-  "Las reservas son no reembolsables. Las cancelaciones deben realizarse con al menos un mes de anticipación a la fecha de check-in.": { en: "Bookings are non-refundable. Cancellations must be made at least one month before the check-in date.", fr: "Les réservations sont non remboursables. Les annulations doivent être effectuées au moins un mois avant la date de check-in.", de: "Buchungen sind nicht erstattungsfähig. Stornierungen müssen mindestens einen Monat vor dem Check-in erfolgen." },
   "¿Se requiere un depósito por adelantado?": { en: "Is an advance deposit required?", fr: "Un acompte est-il requis à l’avance ?", de: "Ist eine Vorauszahlung erforderlich?" },
   "Sí. Se requiere el pago del 100% del monto de la reserva por adelantado para confirmarla.": { en: "Yes. Full payment of the booking amount is required in advance to confirm it.", fr: "Oui. Le paiement de 100 % du montant de la réservation est requis à l’avance pour la confirmer.", de: "Ja. Zur Bestätigung der Buchung ist die vollständige Vorauszahlung des gesamten Betrags erforderlich." },
   "¿Hay conexión de Wi-Fi gratis y cuál es su velocidad?": { en: "Is there free Wi-Fi, and how fast is it?", fr: "Y a-t-il un Wi-Fi gratuit et quelle est sa vitesse ?", de: "Gibt es kostenloses WLAN und wie schnell ist es?" },
@@ -295,7 +297,6 @@ export const catalog: Record<string, Translation> = {
   "Seguridad": { en: "Safety", fr: "Sécurité", de: "Sicherheit" },
   "El check-in es autónomo. Conserva el código de acceso y no lo compartas. En caso de emergencia, usa los números que enviamos antes de tu llegada.": { en: "Check-in is self-guided. Keep the access code and do not share it. In an emergency, use the numbers we send before your arrival.", fr: "L’arrivée est autonome. Conservez le code d’accès et ne le partagez pas. En cas d’urgence, utilisez les numéros envoyés avant votre arrivée.", de: "Der Check-in erfolgt selbstständig. Bewahren Sie den Zugangscode auf und geben Sie ihn nicht weiter. Im Notfall nutzen Sie die Nummern, die wir Ihnen vor der Anreise senden." },
   "Cancelación": { en: "Cancellation", fr: "Annulation", de: "Stornierung" },
-  "Consulta las condiciones de cancelación con el anfitrión antes de confirmar. Las solicitudes enviadas por WhatsApp no generan un cargo automático.": { en: "Ask the host about cancellation terms before confirming. WhatsApp requests do not create an automatic charge.", fr: "Renseignez-vous auprès de l’hôte sur les conditions d’annulation avant de confirmer. Les demandes sur WhatsApp n’entraînent pas de prélèvement automatique.", de: "Fragen Sie den Gastgeber vor der Bestätigung nach den Stornobedingungen. WhatsApp-Anfragen lösen keine automatische Abbuchung aus." },
   "Cuidado del entorno": { en: "Care for the surroundings", fr: "Respect de l’environnement", de: "Rücksicht auf die Natur" },
   "No alimentes animales silvestres, no dejes residuos y permanece en los senderos y terrazas habilitados.": { en: "Do not feed wildlife, leave no waste, and stay on the marked paths and terraces.", fr: "Ne nourrissez pas les animaux sauvages, ne laissez aucun déchet et restez sur les sentiers et terrasses aménagés.", de: "Füttern Sie keine Wildtiere, hinterlassen Sie keinen Müll und bleiben Sie auf den vorgesehenen Wegen und Terrassen." },
   "Hola, quisiera consultar la disponibilidad en Macas Moon.": { en: "Hello, I would like to check availability at Macas Moon.", fr: "Bonjour, je souhaiterais connaître les disponibilités à Macas Moon.", de: "Hallo, ich möchte gerne die Verfügbarkeit bei Macas Moon anfragen." },

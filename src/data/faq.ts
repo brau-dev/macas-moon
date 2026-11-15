@@ -1,3 +1,5 @@
+import { refundPolicy } from "@/data/reservation-policies";
+
 export const faqItems = [
   {
     question: "¿Qué tan lejos estamos de Monteverde?",
@@ -15,7 +17,7 @@ export const faqItems = [
   {
     question: "¿Cuál es la política de cancelación y reembolso?",
     answer:
-      "Las reservas son no reembolsables. Las cancelaciones deben realizarse con al menos un mes de anticipación a la fecha de check-in.",
+      refundPolicy,
   },
   {
     question: "¿Se requiere un depósito por adelantado?",

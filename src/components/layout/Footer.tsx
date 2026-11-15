@@ -76,6 +76,8 @@ export function Footer() {
                 {t("FAQ")}
               </Link>
             </li>
+            <li><Link href="/condiciones-reserva" className="transition-colors duration-200 hover:text-white">{t("Condiciones de reserva")}</Link></li>
+            <li><Link href="/privacidad" className="transition-colors duration-200 hover:text-white">{t("Política de privacidad")}</Link></li>
           </ul>
         </div>
 

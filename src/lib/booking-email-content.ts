@@ -2,6 +2,7 @@ import "server-only";
 import type { Booking } from "@/lib/booking-db";
 import { getDome } from "@/data/domes";
 import { nightsBetween } from "@/lib/date-range";
+import { refundPolicy } from "@/data/reservation-policies";
 
 const BRAND = "Macas Moon Glampings";
 type Row = [string, string];
@@ -61,7 +62,7 @@ export function bookingEmails(booking: Booking, siteOrigin: string | null) {
   ];
   const guest = message("Tu reserva está confirmada", `Hola ${booking.guest_name}. Gracias por elegir ${BRAND}. Será un gusto recibirte. Estos son los detalles de tu estancia:`,
     [["Referencia", reference], ["Titular", booking.guest_name], ...stay, ...payment],
-    "Conserva este correo como comprobante. Si necesitas ayuda o deseas solicitar una modificación, responde a este mensaje e indica la referencia de tu reserva. Los cambios están sujetos a disponibilidad.",
+    `${refundPolicy} Conserva este correo como comprobante. Para solicitar ayuda, responde a este mensaje e indica la referencia de tu reserva. Las solicitudes de cambio se revisan según disponibilidad; no garantizan una modificación.`,
     siteOrigin ? { label: "Ver mi reserva", url: `${siteOrigin}/reservar/estado?id=${encodeURIComponent(booking.id)}` } : undefined);
   const owner = message("Nueva reserva confirmada", "Se ha efectuado una reserva directa en la página web. Este es el aviso para el equipo de Macas Moon Glampings:",
     [["ID de reserva", booking.id], ["Titular", booking.guest_name], ["Correo", booking.guest_email],

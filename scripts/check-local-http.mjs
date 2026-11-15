@@ -18,13 +18,23 @@ async function request(path, status, init) {
 const home = await request("/", 200);
 assert(!/href="\/admin(?:["/])/.test(await home.text()));
 const booking = await request("/reservar", 200);
-assert((await booking.text()).includes("Continuar al pago"), "Compila con NEXT_PUBLIC_BOOKING_TEST_MODE=false para esta comprobación de pago.");
+const bookingText = await booking.text();
+assert(bookingText.includes("Continuar al pago"), "Compila con NEXT_PUBLIC_BOOKING_TEST_MODE=false para esta comprobación de pago.");
+assert(bookingText.includes('name="acceptedPolicies"'));
+for (const path of ["/condiciones-reserva", "/privacidad"]) {
+  assert(bookingText.includes(`href="${path}"`));
+  const policy = await request(path, 200);
+  assert((await policy.text()).includes(path === "/privacidad" ? "Christian Salazar" : "Las noches confirmadas no son reembolsables"));
+}
+for (const method of ["GET", "POST"]) {
+  await request("/api/notifications/whatsapp", 404, { method });
+}
 await request("/admin", 307);
 const login = await request("/admin/login", 200);
 assert.match(login.headers.get("cache-control") ?? "", /no-store/);
 assert.equal(login.headers.get("referrer-policy"), "no-referrer");
 assert.match(login.headers.get("x-robots-tag") ?? "", /noindex/);
-for (const path of ["/api/admin/calendar", "/api/reservations/not-a-uuid", "/.env.netlify", "/.env.local", "/db/001_reservations.sql", "/db/004_admin_cancellations.sql", "/db/005_payment_link_resolution.sql", "/db/006_payment_environment.sql", "/db/007_nightly_prices.sql", "/db/008_payment_issue_resolutions.sql", "/db/009_payment_link_deadline.sql", "/db/010_payment_verification_evidence.sql", "/docs/README.md", "/docs/configuracion-y-deploy.md", "/docs/operacion.md"]) {
+for (const path of ["/api/admin/calendar", "/api/reservations/not-a-uuid", "/.env.netlify", "/.env.local", "/db/001_reservations.sql", "/db/004_admin_cancellations.sql", "/db/005_payment_link_resolution.sql", "/db/006_payment_environment.sql", "/db/007_nightly_prices.sql", "/db/008_payment_issue_resolutions.sql", "/db/009_payment_link_deadline.sql", "/db/010_payment_verification_evidence.sql", "/db/012_booking_policy_consent.sql", "/docs/README.md", "/docs/configuracion-y-deploy.md", "/docs/operacion.md"]) {
   await request(path, path.includes("admin/calendar") ? 401 : path.includes("not-a-uuid") ? 400 : 404);
 }
 for (const method of ["PUT", "DELETE"]) {

@@ -78,7 +78,7 @@ Antes de eliminar un enlace se inspecciona su detalle y se conservan identidades
 autenticadas de intentos conocidos. Si esa lectura falla, no se solicita la
 eliminación en ese intento; las noches vencen igualmente a su hora. El cierre se
 solicita desde el minuto 10, sin liberar el bloqueo antes de los 15 minutos y sin
-garantizar cuándo responderá Tilopay. El [pendiente de lanzamiento](README.md)
+garantizar cuándo responderá Tilopay. El [caso pendiente de validación](README.md)
 describe el caso del pago en proceso que todavía no aparece en ese detalle.
 
 El respaldo reintenta verificaciones de solicitudes vencidas recientes durante
@@ -97,6 +97,17 @@ resultado de la revisión, marcar la confirmación y pulsar **Sí, resolver inci
 administrador y fecha. Esta acción no reembolsa, confirma o cancela reservas,
 libera noches ni cierra enlaces. Una incidencia distinta vuelve a mostrarse sin
 perder las revisiones previas; no ocultar errores reales para limpiar el panel.
+
+## Condiciones de reserva
+
+Las condiciones públicas están en `/condiciones-reserva` y `/privacidad`, enlazadas
+desde el pie y el formulario. El cliente debe aceptarlas antes de pagar; se guardan
+versión y fecha del servidor. Las noches confirmadas no son reembolsables; las dudas,
+cambios y cobros sin confirmación se atienden contactando a la empresa. Christian
+Salazar figura como responsable de datos; su dirección comercial queda pendiente
+de completar por indicación del propietario.
+Al cambiar las condiciones o privacidad, actualizar también su versión en
+`src/data/reservation-policies.ts` y conservar el texto de la versión anterior.
 
 ## Airbnb y Expedia
 
