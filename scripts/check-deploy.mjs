@@ -7,7 +7,7 @@ import { parseBookingEnv, validateBookingEnv } from "./booking-env.mjs";
 let parsed;
 try { parsed = parseBookingEnv(readFileSync(".env.netlify", "utf8")); }
 catch { console.error("No se pudo abrir .env.netlify. No se mostraron valores privados."); process.exit(1); }
-const result = validateBookingEnv(parsed.values);
+const result = validateBookingEnv(parsed.values, { production: process.argv.includes("--production") });
 const errors = [...parsed.errors, ...result.errors];
 for (const warning of result.warnings) console.warn("Aviso: " + warning);
 if (errors.length) {

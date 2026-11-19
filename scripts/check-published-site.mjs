@@ -7,7 +7,8 @@ async function main() {
   const parsed = parseBookingEnv(readFileSync(".env.netlify", "utf8"));
   const errors = [...parsed.errors, ...validateBookingEnv(parsed.values).errors];
   if (errors.length) throw new Error("Primero corrige la configuración local con npm run check:netlify-env.");
-  const target = new URL(process.argv[2] ?? "https://macasmoon-reservas-testing.netlify.app");
+  const target = new URL(process.argv[2] ?? (parsed.values.get("TILOPAY_EXPECTED_ENVIRONMENT") === "Production"
+    ? "https://macasmoonglampings.com" : "https://macasmoon-reservas-testing.netlify.app"));
   if (target.protocol !== "https:" || target.username || target.password || target.port ||
       target.search || target.hash || target.pathname !== "/") {
     throw new Error("Indica solo la dirección HTTPS pública del sitio, sin rutas ni parámetros.");

@@ -49,9 +49,9 @@ Los comentarios `.env` no configuran casillas ni permisos en Netlify.
 | `PRICE_DOMO_ROMANTICO_CENTS`, `PRICE_DOMO_AMPLIO_CENTS` | `17000` cada una: USD 170 por noche. |
 | `NEXT_PUBLIC_BOOKING_TEST_MODE` | `false`: pago obligatorio. |
 | `TILOPAY_CHECKOUT_ENABLED` | `true` |
-| `TILOPAY_EXPECTED_ENVIRONMENT` | `Test`; no cambia el modo real del comercio. |
+| `TILOPAY_EXPECTED_ENVIRONMENT` | `Production`; debe coincidir con el modo real del comercio. |
 | `BOOKING_RECONCILE_ENABLED` | `true`: respaldo de pagos, cierres y correos. |
-| `NEXT_PUBLIC_TURNSTILE_SITE_KEY` | Clave pública del widget para el dominio de pruebas. |
+| `NEXT_PUBLIC_TURNSTILE_SITE_KEY` | Clave pública del widget que permita el dominio final. |
 | `SMTP_USER` | Gmail remitente y destinatario del aviso al negocio. |
 | `ADMIN_USERNAME` | De 3 a 80 caracteres: letras, números, punto, guion o guion bajo. |
 | `BOOKING_REPLY_TO` | Opcional; si está vacío, las respuestas van a `SMTP_USER`. |
@@ -91,12 +91,14 @@ eludir un hallazgo. Si se expuso una credencial, rotarla y revisar el historial.
   [contraseña de aplicación](https://myaccount.google.com/apppasswords).
   `npm run check:smtp` prueba autenticación sin enviar mensajes, pero no acredita
   entrega ni conexión desde Netlify. No requiere Resend ni comprar otro correo.
-- **Turnstile:** widget Managed con hostname `macasmoon-reservas-testing.netlify.app`,
+- **Turnstile:** widget Managed que permita `macasmoonglampings.com` en producción
+  y `macasmoon-reservas-testing.netlify.app` durante pruebas,
   clave pública y privada del mismo widget. No usar claves de demostración ni
   desactivar el control. No necesita mover DNS para esta integración.
-- **Tilopay:** usar las credenciales del comercio y verificar su modo Test en el
-  portal antes de probar. Usar solo las [tarjetas ficticias oficiales](https://tilopay.com/developers/tarjetas-de-prueba).
-  No repetir un pago aprobado para diagnosticar un fallo de confirmación.
+- **Tilopay:** comprobar en el portal que el modo del comercio coincida con
+  `TILOPAY_EXPECTED_ENVIRONMENT`. Las [tarjetas ficticias oficiales](https://tilopay.com/developers/tarjetas-de-prueba)
+  se usan únicamente en Test; en Production hay cobros reales. No repetir un pago
+  aprobado para diagnosticar un fallo de confirmación.
 
 ## Base de datos y migraciones
 
@@ -150,7 +152,13 @@ costos: esta frecuencia no garantiza que alcance un plan concreto. Comparar cons
 tras publicar sin añadir sondeos permanentes. Consultar el panel no cierra enlaces;
 la importación iCal usa caché por instancia, y al reservar se fuerza una lectura nueva.
 
-## Cobros reales: solo con autorización expresa
+## Preparación de cobros reales
+
+El propietario autorizó preparar `Production` el 16 de noviembre de 2026. El maestro
+local y sus archivos de importación requieren pago obligatorio, entorno esperado
+`Production` y respaldo activo; no contienen una clave para reservas gratuitas.
+El servidor rechaza esa vía gratuita en `Production` incluso si se activa por error
+su indicador. El despliegue y el ajuste del comercio en Tilopay se comprueban aparte.
 
 Primero completar las pruebas de pagos y gestión manual de incidencias de la
 [guía del proyecto](README.md), la dirección pendiente en privacidad y la
@@ -158,16 +166,33 @@ restauración de respaldos.
 Atender enlaces e incidencias Test en su entorno original; liberar desde `/admin`
 las noches ficticias y comprobar reapertura externa conservando el historial.
 
-Después, con autorización, habilitar el comercio real en Tilopay y establecer
+Habilitar el comercio real en Tilopay y establecer
 `TILOPAY_EXPECTED_ENVIRONMENT=Production`, con las credenciales que correspondan.
 Mantener pago obligatorio, tarifas y respaldo. Validar el archivo definitivo con
-`npm run check:netlify-env -- archivo-privado --production`, importar y publicar.
+`npm run check:netlify-env -- archivo-privado --production` y ejecutar
+`npm run check:deploy -- --production` antes de importar y publicar.
 La variable de la web no cambia el modo de la cuenta; Test y Producción comparten
 host. El historial Test conserva su entorno y no se consulta con el de Producción.
 Comprobar después un cobro real autorizado, correos y liquidación.
 
-Cambiar a `macasmoon.com` o a otro proyecto/base requiere además dominio, Turnstile,
-variables, migraciones y enlaces de anuncios; no forma parte de la autorización
-actual. Referencias: [entornos Tilopay](https://tilopay.com/developers/entornos),
+El destino confirmado es **macasmoonglampings.com**. El propietario indica que
+`main` ya está conectado al despliegue de ese dominio y realizará el push.
+
+- Antes del push, importar los archivos de entorno regenerados en el proyecto y
+  contexto de producción. Los `.env` privados no se incluyen en Git: el push no
+  actualiza sus valores en Netlify.
+- Netlify debe suministrar `URL=https://macasmoonglampings.com`; no importar
+  manualmente esa variable gestionada por la plataforma. El servidor la usa para
+  retornos de pago, webhook, comprobación de origen y correos. La URL alternativa
+  del sitio y `check:published` también apuntan a este dominio en producción.
+- El widget Turnstile debe permitir el dominio final y sus claves deben corresponder
+  al widget real. La base del proyecto de producción debe tener las migraciones
+  pendientes aplicadas y el respaldo programado activo. Si es otra base, comprobar
+  el traslado de datos y que los anuncios importan los iCal de producción.
+- Tras el push, ejecutar `npm run check:published`. La autenticación API de Tilopay
+  no acredita que el comercio esté en modo real: el propietario indicó que aún
+  no lo ha comprobado. Revisarlo en su portal antes de abrir reservas.
+
+Referencias: [entornos Tilopay](https://tilopay.com/developers/entornos),
 [importación de variables](https://docs.netlify.com/build/environment-variables/get-started/#import-variables-with-the-netlify-ui)
 y [escaneo de secretos](https://docs.netlify.com/build/environment-variables/secrets-scanning/).

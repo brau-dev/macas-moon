@@ -1,5 +1,5 @@
 export const siteUrl =
-  process.env.URL ?? "https://www.macasmoon.com";
+  process.env.URL ?? "https://macasmoonglampings.com";
 
 export const sitePhone = {
   display: "+506 7111 0261",

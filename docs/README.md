@@ -23,15 +23,20 @@ noche: una estancia del 10 al 11 ocupa y cobra solo la noche del 10.
 
 Rama `feature/reservas`, proyecto Netlify **macasmoon-reservas-testing**, URL
 **https://macasmoon-reservas-testing.netlify.app**. Ambos domos requieren pago;
-Tilopay permanece en **Test** hasta autorización expresa del propietario.
-Los commits, pushes y despliegues los realiza el propietario. No modificar `main`
-ni el sitio principal `macasmoon.com` como parte de estas pruebas.
+El maestro local está preparado para **Production** por solicitud del propietario
+del 16 de noviembre de 2026. Esto no activa el modo real en el portal de Tilopay
+ni actualiza por sí solo Netlify. El destino de producción indicado es
+**https://macasmoonglampings.com**. El propietario realizará el push a `main`,
+que ya está vinculado al despliegue de ese dominio.
+El nombre del proyecto no determina el entorno de los pagos.
+Los commits, pushes y despliegues los realiza el propietario. La preparación
+actual permanece en `feature/reservas`; el propietario integrará y publicará en `main`.
 
 El propietario indica que el sitio principal aún no está activo y que utiliza la
 URL de pruebas. El proyecto estuvo pausado anteriormente: verificar su estado en
-Netlify antes de interpretar un 404. Una consulta automatizada del 23 de octubre
-de 2026 recibió 404; no permitió comprobar la revisión, variables ni migraciones
-publicadas. No se atribuyó esa respuesta a un fallo del código.
+Netlify antes de interpretar un 404. El 16 de noviembre de 2026, `check:published`
+recibió HTTP 404 en `/api/pricing`; no permitió comprobar la revisión, variables ni
+migraciones publicadas. No se atribuyó esa respuesta a un fallo del código.
 
 ## Cómo funciona una reserva
 
@@ -96,11 +101,25 @@ Una conversación de WhatsApp no bloquea noches por sí sola.
 
 ## Estado y condiciones para lanzar
 
-**Última validación local, 15 de noviembre de 2026:** 98 pruebas, lint,
+**Preparación de producción, 16 de noviembre de 2026:** se actualizaron Next.js
+y su configuración ESLint a 16.4.5, Nodemailer a 10.6.0 y dependencias afectadas
+de desarrollo. `npm audit fix` terminó sin vulnerabilidades conocidas. Referencia:
+[actualización de seguridad de Next.js](https://nextjs.org/blog/november-2026-security-release).
+Las verificaciones locales no demuestran que el comercio esté en modo real ni
+que las migraciones, el respaldo programado y los correos funcionen en Netlify.
+La conexión Neon disponible en esta revisión corresponde a otro proyecto;
+no se consultó ni modificó su base para validar Macas Moon.
+
+**Última validación local, 16 de noviembre de 2026:** 98 pruebas, lint,
 TypeScript, compilación, auditoría de exposición sin hallazgos y comprobaciones
 HTTP aisladas. Las pruebas utilizan PostgreSQL embebido y proveedores simulados;
 no certifican el comercio publicado, entrega real de correo ni liquidación bancaria.
 La simulación de concurrencia no reproduce todos los bloqueos de PostgreSQL remoto.
+
+Los cuatro iCal privados respondieron y Gmail aceptó conexión/autenticación sin
+enviar correos. Tilopay aceptó el login API sin crear enlaces ni cobros; eso no
+comprueba el modo del comercio ni la llave API. Después del push a `main`, ejecutar
+`npm run check:published` para validar el despliegue en `macasmoonglampings.com`.
 
 Las migraciones **0009 y 0010 están preparadas localmente**; su aplicación remota
 no está comprobada. La 0010 conserva identidades obtenidas del detalle autenticado
@@ -118,8 +137,8 @@ La documentación de [webhooks](https://tilopay.com/developers/api/webhooks) ind
 un solo intento para compras y remite a soporte para el algoritmo de `orderHash`.
 No se ha implementado una firma supuesta ni contactado al proveedor.
 
-Pruebas de aceptación pendientes en el sitio publicado, siempre con el comercio
-en Test y fechas acordadas: una reserva completa por cada domo, retorno, webhook,
+Pruebas de aceptación pendientes en un sitio aislado, con comercio en Test y fechas
+acordadas: una reserva completa por cada domo, retorno, webhook,
 confirmación, dos correos, iCal correcto, rechazo, abandono, pago durante el cierre,
 pago tardío sin recuperar noches, enlaces antiguos/HTTP 400/`Just Once`, precios
 especiales y total desactualizado, anulación, bloqueo parcial y resolución de

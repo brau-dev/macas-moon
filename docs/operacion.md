@@ -116,8 +116,8 @@ dos iCal de salida para importar en los anuncios correspondientes:
 
 | Domo | Enlace público para importar en Airbnb y Expedia |
 | --- | --- |
-| Amplio | `https://macasmoon-reservas-testing.netlify.app/api/calendar/domo-amplio/calendar.ics` |
-| Romántico | `https://macasmoon-reservas-testing.netlify.app/api/calendar/domo-romantico/calendar.ics` |
+| Amplio | `https://macasmoonglampings.com/api/calendar/domo-amplio/calendar.ics` |
+| Romántico | `https://macasmoonglampings.com/api/calendar/domo-romantico/calendar.ics` |
 
 También se pueden copiar desde **Sincronización** en el panel. No intercambiar
 domos ni confundir la exportación de cada plataforma con estos enlaces de nuestra

@@ -49,7 +49,7 @@ test("public calendar shows availability without daily prices; quotes load only 
   assert(source.includes("Ver precio de cada noche")); assert(source.includes("Total de la estadía:"));
 });
 
-test("admin calendar prices have their own color, exact amount, currency and nightly unit", async () => {
+test("admin calendar prices keep the same color for base and special rates, exact amount, currency and nightly unit", async () => {
   const { createElement } = await import("react");
   const { renderToStaticMarkup } = await import("react-dom/server");
   const { AdminNightPrice } = await import("../src/components/admin/AdminNightPrice");
@@ -62,7 +62,7 @@ test("admin calendar prices have their own color, exact amount, currency and nig
     const html = renderToStaticMarkup(createElement(AdminNightPrice, { day, currency, night: { date: day, amountCents, special } }));
     assert(html.includes(expected));
     assert(html.includes(`>${currency}</span>`)); assert(html.includes(">/noche</span>"));
-    assert(html.includes("text-teal-950")); assert(html.includes(special ? "bg-teal-100" : "bg-teal-50"));
+    assert(html.includes("text-teal-950")); assert(html.includes("bg-teal-50"));
     assert(html.includes(`Precio de la noche del ${day}`));
     assert(html.includes(special ? "Tarifa especial." : "Tarifa base."));
   }
@@ -646,6 +646,13 @@ test("reservations, payments, iCal and private administration", async (t) => {
       process.env.NEXT_PUBLIC_BOOKING_TEST_MODE = "false";
       await assert.rejects(service.startReservation(payload("2028-07-01", "2028-07-02"), testKey, "http://localhost"), { status: 403 });
       process.env.NEXT_PUBLIC_BOOKING_TEST_MODE = "true";
+      const environment = process.env.TILOPAY_EXPECTED_ENVIRONMENT;
+      try {
+        // Misconfigured free-test flags must never bypass payment in Production.
+        process.env.TILOPAY_EXPECTED_ENVIRONMENT = "Production";
+        await assert.rejects(service.startReservation(payload("2028-07-01", "2028-07-02"), testKey, "http://localhost"), { status: 403 });
+        assert.equal((await sql.query("SELECT id FROM reservations WHERE check_in='2028-07-01'")).rows.length, 0);
+      } finally { process.env.TILOPAY_EXPECTED_ENVIRONMENT = environment; }
     });
     await t.test("incomplete checkout cannot allocate nights or create a payment link", async () => {
       const before = createdPayments;
@@ -1257,6 +1264,7 @@ test("reservations, payments, iCal and private administration", async (t) => {
       assert.deepEqual(validateBookingEnv(values, { production: true }).errors, []);
       values.set("BOOKING_RECONCILE_ENABLED", "false");
       assert(validateBookingEnv(values, { production: true }).errors.some((error: string) => error.includes("BOOKING_RECONCILE_ENABLED")));
+      assert(validateBookingEnv(values).errors.some((error: string) => error.includes("BOOKING_RECONCILE_ENABLED")));
       values.set("BOOKING_RECONCILE_ENABLED", "true");
       values.set("NEXT_PUBLIC_TURNSTILE_SITE_KEY", "1x00000000000000000000AA");
       assert(validateBookingEnv(values).errors.some((error: string) => error.includes("demostración")));
@@ -1264,6 +1272,11 @@ test("reservations, payments, iCal and private administration", async (t) => {
       values.set("TURNSTILE_SECRET_KEY", "1x0000000000000000000000000000000AA");
       assert(validateBookingEnv(values).errors.some((error: string) => error.includes("demostración")));
       values.set("TURNSTILE_SECRET_KEY", "fixture");
+      for (const host of ["macasmoonglampings.com", "www.macasmoonglampings.com"]) {
+        values.set("ICAL_DOMO_AMPLIO_AIRBNB_URL", `https://${host}/api/calendar/domo-amplio/calendar.ics`);
+        assert(validateBookingEnv(values).errors.some((error: string) => error.includes("ICAL_DOMO_AMPLIO_AIRBNB_URL")));
+      }
+      values.set("ICAL_DOMO_AMPLIO_AIRBNB_URL", "https://airbnb.example/calendar.ics");
       values.set("BOOKING_ACTIVE_DOMES", "domo-romantico,domo-amplio");
       assert(validateBookingEnv(values).errors.some((error: string) => error.includes("ROMANTICO")));
       values.set("BOOKING_ACTIVE_DOMES", "domo-amplio");
@@ -1275,6 +1288,8 @@ test("reservations, payments, iCal and private administration", async (t) => {
       values.set("NEXT_PUBLIC_BOOKING_TEST_MODE", "true");
       values.set("TILOPAY_CHECKOUT_ENABLED", "false"); values.set("BOOKING_RECONCILE_ENABLED", "false");
       values.set("BOOKING_TEST_SECRET", "fixture_only_".repeat(4));
+      assert(validateBookingEnv(values).errors.length > 0);
+      values.set("TILOPAY_EXPECTED_ENVIRONMENT", "Test");
       assert.deepEqual(validateBookingEnv(values).errors, []);
       assert(validateBookingEnv(values, { production: true }).errors.length > 0);
     });

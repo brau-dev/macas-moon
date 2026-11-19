@@ -24,6 +24,7 @@ export function validateBookingEnv(values, { production = false } = {}) {
   const errors = [];
   const warnings = [];
   const get = (key) => values.get(key);
+  production ||= get("TILOPAY_EXPECTED_ENVIRONMENT") === "Production";
   for (const key of classifyNetlifyEnv(values).unknown) errors.push(`${key} no es una variable reconocida de este proyecto; revisa el nombre antes de importar.`);
   const requireValue = (key) => { if (!configured(get(key))) errors.push(`Falta completar ${key}.`); };
   const requireFlag = (key, expected) => { if (get(key) !== expected) errors.push(`${key} debe ser ${expected}.`); };
@@ -61,7 +62,7 @@ export function validateBookingEnv(values, { production = false } = {}) {
       try {
         const url = new URL(get(feedKey));
         if (url.protocol !== "https:" || url.username || url.password || url.hash ||
-          url.hostname.endsWith(".netlify.app") || /(^|\.)macasmoon\.com$/.test(url.hostname)) throw new Error();
+          url.hostname.endsWith(".netlify.app") || /(^|\.)(?:macasmoon|macasmoonglampings)\.com$/.test(url.hostname)) throw new Error();
         urls.push(url.href);
         if (allFeeds.has(url.href)) errors.push(`${feedKey} repite otro calendario: cada anuncio/domo requiere su enlace correcto.`);
         allFeeds.add(url.href);
