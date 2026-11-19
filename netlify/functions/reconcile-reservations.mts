@@ -6,7 +6,7 @@ async function reconcileReservations() {
   const secret = process.env.BOOKING_RECONCILE_SECRET;
   if (!siteUrl || !secret) throw new Error("Booking reconciliation is not configured");
   const response = await fetch(`${siteUrl.replace(/\/$/, "")}/api/internal/reconcile`, {
-    method: "POST", headers: { "x-reconcile-secret": secret }, signal: AbortSignal.timeout(25_000),
+    method: "POST", redirect: "error", headers: { "x-reconcile-secret": secret }, signal: AbortSignal.timeout(25_000),
   });
   if (!response.ok) throw new Error(`Booking reconciliation HTTP ${response.status}`);
   if (response.status !== 204) {

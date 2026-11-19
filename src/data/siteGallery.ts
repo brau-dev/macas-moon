@@ -107,7 +107,7 @@ const domeImages: SiteGalleryImage[] = domes.flatMap((dome) =>
     src: image.src,
     alt: image.alt,
     category: dome.slug === "domo-amplio" ? "domo1" : "domo2",
-    orientation: "landscape",
+    orientation: image.orientation ?? "landscape",
   })),
 );
 

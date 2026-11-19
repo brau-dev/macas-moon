@@ -94,4 +94,10 @@ export const policyTranslations: Record<string, Translation> = {
     fr: "La langue choisie est conservée dans le stockage local de votre navigateur. Le formulaire est protégé par Cloudflare Turnstile, qui peut traiter des informations techniques sur l’appareil et la connexion. Vous pouvez effacer les préférences dans votre navigateur.",
     de: "Wir speichern Ihre Sprachauswahl im lokalen Speicher Ihres Browsers. Zum Formularschutz wird Cloudflare Turnstile eingesetzt; dabei können technische Informationen über Gerät und Verbindung verarbeitet werden. Die Einstellungen können Sie im Browser löschen.",
   },
+  "Estadísticas del sitio": { en: "Website analytics", fr: "Statistiques du site", de: "Website-Statistiken" },
+  "Cuando está habilitado, Google Analytics utiliza cookies e información del navegador y la navegación para medir el uso del sitio. Puedes limitar estas cookies desde tu navegador.": {
+    en: "When enabled, Google Analytics uses cookies and information about your browser and navigation to measure website usage. You can restrict these cookies in your browser.",
+    fr: "Lorsque Google Analytics est activé, il utilise des cookies et des informations sur votre navigateur et votre navigation pour mesurer l’utilisation du site. Vous pouvez limiter ces cookies dans votre navigateur.",
+    de: "Wenn Google Analytics aktiviert ist, verwendet es Cookies sowie Informationen über Ihren Browser und Ihre Navigation, um die Nutzung der Website zu messen. Sie können diese Cookies in Ihrem Browser einschränken.",
+  },
 };

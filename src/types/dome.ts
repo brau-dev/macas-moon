@@ -42,6 +42,7 @@ export type GalleryImage = {
   src: string;
   alt: string;
   category: GalleryCategory;
+  orientation?: "portrait" | "landscape";
 };
 
 export type SpaceLayout = "full" | "half" | "wide";

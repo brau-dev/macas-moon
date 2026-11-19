@@ -4,6 +4,7 @@ import { reconcilePayment } from "@/lib/reservation-service";
 import { readJsonObject } from "@/lib/request-body";
 import { BookingError } from "@/lib/booking-error";
 import { logServerError } from "@/lib/safe-log";
+import { signedWebhookCandidate } from "@/lib/tilopay";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -21,12 +22,21 @@ export async function POST(request: Request) {
   }
   try {
     const result = await getPool().query<{ id: string }>(
-      "SELECT id FROM reservations WHERE payment_environment = $3 AND (payment_link_id = $1 OR payment_reference = $2)",
+      `SELECT id FROM reservations WHERE payment_environment = $3 AND payment_provider = 'tilopay'
+       AND ($1::text IS NULL OR payment_link_id = $1) AND ($2::text IS NULL OR payment_reference = $2)`,
       [validLinkId ? String(linkId) : null, validReference ? reference : null, process.env.TILOPAY_EXPECTED_ENVIRONMENT]);
-    if (result.rows[0]) await reconcilePayment(result.rows[0].id);
+    const booking = result.rows[0];
+    if (booking) {
+      const candidate = validLinkId
+        ? signedWebhookCandidate(booking.id, new URL(request.url).searchParams.get("token"), data)
+        : undefined;
+      await reconcilePayment(booking.id, candidate);
+    }
     // Webhook content alone cannot confirm a booking: reconcilePayment queries Tilopay.
     return new Response(null, { status: 200 });
   } catch (error) {
+    // A verified late payment is already recorded for the administrator.
+    if (error instanceof BookingError && error.status === 409) return new Response(null, { status: 200 });
     logServerError("Tilopay webhook reconciliation failed", error);
     return NextResponse.json({ error: "Reconciliation failed" }, { status: 503 });
   }

@@ -104,8 +104,8 @@ Las condiciones públicas están en `/condiciones-reserva` y `/privacidad`, enla
 desde el pie y el formulario. El cliente debe aceptarlas antes de pagar; se guardan
 versión y fecha del servidor. Las noches confirmadas no son reembolsables; las dudas,
 cambios y cobros sin confirmación se atienden contactando a la empresa. Christian
-Salazar figura como responsable de datos; su dirección comercial queda pendiente
-de completar por indicación del propietario.
+Salazar figura como responsable de datos. La política muestra la ubicación pública
+de Macas Moon Glamping, con enlace al mapa, según indicó el propietario.
 Al cambiar las condiciones o privacidad, actualizar también su versión en
 `src/data/reservation-policies.ts` y conservar el texto de la versión anterior.
 

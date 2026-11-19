@@ -4,12 +4,22 @@ import { promisify } from "node:util";
 import { join, relative } from "node:path";
 import { parseBookingEnv } from "./booking-env.mjs";
 import { configuredSecretEncodings, minimumSecretLength } from "./secret-encodings.mjs";
+import { netlifySecretKeys } from "./netlify-env-policy.mjs";
 
 // Read-only audit. Never prints secret values, matching text, provider URLs or tokens.
 const findings = [];
 const ignored = new Set([".git", "node_modules", ".next", ".netlify"]);
-const privateKey = /^(TILOPAY_API_(USER|PASSWORD|KEY)|ADMIN_PASSWORD_HASH|BOOKING_(TEST_SECRET|RECONCILE_SECRET)|TURNSTILE_SECRET_KEY|SMTP_PASSWORD|RESEND_API_KEY|NETLIFY_DB_URL|DATABASE_URL|ICAL_.+_URL)$/;
-const values = new Map();
+const privateKeys = new Set([...netlifySecretKeys, "NETLIFY_DB_URL", "RESEND_API_KEY"]);
+const patterns = new Map();
+function collect(key, value) {
+  if (!privateKeys.has(key) || !value || value.length < minimumSecretLength) return;
+  const variants = patterns.get(key) ?? new Set();
+  for (const encoding of configuredSecretEncodings(value)) variants.add(encoding);
+  if (key === "SMTP_PASSWORD") {
+    for (const encoding of configuredSecretEncodings(value.replace(/\s/g, ""))) variants.add(encoding);
+  }
+  patterns.set(key, variants);
+}
 const run = promisify(execFile);
 async function git(args) {
   try { return (await run("git", args, { encoding: "buffer", maxBuffer: 25_000_000 })).stdout; }
@@ -18,14 +28,14 @@ async function git(args) {
 for (const file of [".env.local", ".env.netlify"]) {
   if (!existsSync(file)) continue;
   for (const [key, value] of parseBookingEnv(readFileSync(file, "utf8")).values) {
-    if (privateKey.test(key) && value.length >= minimumSecretLength) values.set(key, value);
+    collect(key, value);
   }
   if (process.platform !== "win32" && (statSync(file).mode & 0o077)) findings.push({ kind: "local-file-permissions", file });
 }
 for (const [key, value] of Object.entries(process.env)) {
-  if (privateKey.test(key) && value && value.length >= minimumSecretLength) values.set(key, value);
+  collect(key, value);
 }
-if (values.has("SMTP_PASSWORD")) values.set("SMTP_PASSWORD (sin espacios)", values.get("SMTP_PASSWORD").replace(/\s/g, ""));
+const encodedSecrets = [...patterns].map(([key, variants]) => [key, [...variants].map((value) => Buffer.from(value))]);
 
 function walk(dir) {
   return readdirSync(dir, { withFileTypes: true }).flatMap((item) => {
@@ -37,8 +47,8 @@ function walk(dir) {
 }
 
 function scan(buffer, file, revision) {
-  for (const [key, value] of values) {
-    if (configuredSecretEncodings(value).some((encoded) => buffer.includes(Buffer.from(encoded)))) {
+  for (const [key, variants] of encodedSecrets) {
+    if (variants.some((encoded) => buffer.includes(encoded))) {
       findings.push({ kind: "configured-private-value", key, file, ...(revision ? { revision } : {}) });
     }
   }

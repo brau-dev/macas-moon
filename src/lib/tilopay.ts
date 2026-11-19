@@ -1,5 +1,5 @@
 import "server-only";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { getPool, savePaymentLink, type Booking } from "@/lib/booking-db";
 import { CheckoutError, checkoutStep, paymentLinkDiagnostic, type CheckoutStage } from "@/lib/checkout-error";
 import { logServerError } from "@/lib/safe-log";
@@ -66,9 +66,18 @@ async function token() {
   finally { if (tokenRequest?.promise === promise) tokenRequest = undefined; }
 }
 
+function paymentWebhookToken(bookingId: string) {
+  const secret = process.env.BOOKING_RECONCILE_SECRET;
+  if (!secret || secret.length < 32) return null;
+  return createHmac("sha256", secret).update(`tilopay-payment-link:${bookingId}`).digest("hex");
+}
+
 export async function createPaymentUrl(booking: Booking, siteUrl: string) {
   requirePaymentEnvironment(booking);
   const { key } = credentials();
+  const webhook = new URL("/api/reservations/webhook", siteUrl);
+  const webhookToken = paymentWebhookToken(booking.id);
+  if (webhookToken) webhook.searchParams.set("token", webhookToken);
   const result = await api<{ type?: string; url?: string; id?: number }>("createLinkPayment", {
     key,
     amount: (booking.amount_cents / 100).toFixed(2),
@@ -78,7 +87,7 @@ export async function createPaymentUrl(booking: Booking, siteUrl: string) {
     client: booking.guest_name,
     description: `Macas Moon · ${booking.dome} · ${booking.check_in} al ${booking.check_out}`,
     callback_url: `${siteUrl}/api/reservations/return/${booking.id}`,
-    webhook_url: `${siteUrl}/api/reservations/webhook`,
+    webhook_url: webhook.href,
   }, await token());
   if (result.type !== "200") {
     throw new CheckoutError("tilopay_link", "rejected", { providerCode: result.type });
@@ -98,7 +107,16 @@ type Payment = { orderNumber?: string; amount?: string; currency?: string; code?
 
 type LinkPayment = { orderNumber?: string; id?: number | string; amount?: string;
   currency?: string; code?: string; create?: string };
-type PaymentCandidate = { order: string; transactionId?: string };
+export type PaymentCandidate = { order: string; transactionId?: string };
+
+export function signedWebhookCandidate(bookingId: string, supplied: string | null, data: Record<string, unknown>) {
+  const expected = paymentWebhookToken(bookingId);
+  if (!expected || !supplied || !/^[a-f0-9]{64}$/.test(supplied) ||
+    !timingSafeEqual(Buffer.from(expected), Buffer.from(supplied))) return undefined;
+  const order = data.orderNumber;
+  const transactionId = paymentId(data.tilopayOrderId);
+  return validOrder(order) && transactionId ? { order, transactionId } : undefined;
+}
 type LinkDetail = { type?: string | number; id?: number; reference?: string; amount?: string; currency?: string };
 type LinkResult = { type?: string | number; detail?: LinkDetail; payments?: LinkPayment[] };
 
@@ -245,6 +263,16 @@ export function matchesApprovedPayment(payment: Payment, booking: Booking, order
     (!process.env.TILOPAY_MERCHANT_ID || String(payment.merchantId) === process.env.TILOPAY_MERCHANT_ID);
 }
 
+async function consultPayment(booking: Booking, key: string, bearer: string, { order, transactionId }: PaymentCandidate) {
+  const result = await api<{ type?: string; response?: Payment[] }>("consult",
+    { key, orderNumber: order, merchantId: process.env.TILOPAY_MERCHANT_ID ?? "" }, bearer);
+  if (result.type !== "200" || !Array.isArray(result.response)) {
+    throw new CheckoutError("tilopay_check", "invalid_response");
+  }
+  return result.response.some((payment) => payment && matchesApprovedPayment(payment, booking, order) &&
+    (!transactionId || paymentId(payment.id_tilopay) === transactionId));
+}
+
 async function verifiedPayment(booking: Booking, key: string, bearer: string,
   link?: { detail: LinkDetail; payments: LinkPayment[] }) {
   if (!booking.payment_reference) return false;
@@ -279,14 +307,8 @@ async function verifiedPayment(booking: Booking, key: string, bearer: string,
     }
     candidates = await linkPaymentCandidates(payments, booking, key, bearer);
   }
-  for (const { order, transactionId } of candidates) {
-    const result = await api<{ type?: string; response?: Payment[] }>("consult",
-      { key, orderNumber: order, merchantId: process.env.TILOPAY_MERCHANT_ID ?? "" }, bearer);
-    if (result.type !== "200" || !Array.isArray(result.response)) {
-      throw new CheckoutError("tilopay_check", "invalid_response");
-    }
-    if (result.response.some((payment) => payment && matchesApprovedPayment(payment, booking, order) &&
-      (!transactionId || paymentId(payment.id_tilopay) === transactionId))) return true;
+  for (const candidate of candidates) {
+    if (await consultPayment(booking, key, bearer, candidate)) return true;
   }
   // A known attempt still needs verification even after our deletion of its link.
   if (detailError) throw detailError;
@@ -300,14 +322,18 @@ export function requirePaymentEnvironment(booking: Pick<Booking, "payment_enviro
   }
 }
 
-export async function paymentApproved(booking: Booking): Promise<boolean | null> {
+export async function paymentApproved(booking: Booking, webhookCandidate?: PaymentCandidate): Promise<boolean | null | "closed-link-webhook"> {
   if (!booking.payment_reference) return false;
   requirePaymentEnvironment(booking);
   const { key } = credentials();
   try {
-    const approved = await verifiedPayment(booking, key, await token());
+    const bearer = await token();
+    const approved = await verifiedPayment(booking, key, bearer);
+    // After deletion, an authenticated consult of a notification from the
+    // per-reservation webhook can surface a charge for manual review.
+    const reportedCharge = approved === null && webhookCandidate && await consultPayment(booking, key, bearer, webhookCandidate);
     await getPool().query("UPDATE reservations SET payment_verification_error = NULL WHERE id = $1", [booking.id]);
-    return approved;
+    return reportedCharge ? "closed-link-webhook" : approved;
   } catch (error) {
     await getPool().query("UPDATE reservations SET payment_verification_error = $2::jsonb WHERE id = $1",
       [booking.id, JSON.stringify(paymentLinkDiagnostic(error, randomUUID()))]);

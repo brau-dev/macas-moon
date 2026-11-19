@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import Script from "next/script";
 import Link from "next/link";
 import { bookingPolicyVersion, refundPolicy } from "@/data/reservation-policies";
@@ -24,7 +23,6 @@ function nights(start: string, end: string) {
 }
 
 export function DirectBookingForm({ initialDome }: { initialDome?: string }) {
-  const router = useRouter();
   const { t, language } = useLanguage();
   const countryNames = new Intl.DisplayNames([language], { type: "region" });
   const countries = residenceCountries.map((code) => ({ code, name: countryNames.of(code) ?? code }))
@@ -122,8 +120,12 @@ export function DirectBookingForm({ initialDome }: { initialDome?: string }) {
           ? ` Referencia de soporte: ${result.requestId}.` : "";
         throw new Error((result.error ?? "No se pudo iniciar la reserva.") + reference);
       }
-      if (result.status === "confirmed") router.push(`/reservar/estado?id=${result.id}`);
-      else {
+      if (result.status === "confirmed") {
+        // Start a new document so the public site's analytics cannot follow the reservation ID.
+        const statusUrl = new URL("/reservar/estado", window.location.origin);
+        statusUrl.searchParams.set("id", result.id);
+        window.location.assign(statusUrl);
+      } else {
         const paymentUrl = trustedTilopayPaymentUrl(result.paymentUrl);
         if (!paymentUrl) throw new Error("No se recibió una dirección de pago válida de Tilopay.");
         window.location.assign(paymentUrl);

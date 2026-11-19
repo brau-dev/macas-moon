@@ -222,7 +222,9 @@ test("reservations, payments, iCal and private administration", async (t) => {
   marker.loaded = true;
   require.cache[markerPath] = marker;
   const sql = await PGlite.create();
-  await sql.exec(readFileSync("db/001_reservations.sql", "utf8"));
+  const initialSchema = readFileSync("db/001_reservations.sql", "utf8");
+  assert.equal(initialSchema, readFileSync("netlify/database/migrations/0001_create_reservations.sql", "utf8"));
+  await sql.exec(initialSchema);
   const upgrade = readFileSync("db/002_admin_and_payment_links.sql", "utf8");
   await sql.exec(upgrade);
   await sql.exec(upgrade); // Migration can safely be reapplied manually.
@@ -370,6 +372,7 @@ test("reservations, payments, iCal and private administration", async (t) => {
   const transactionRequests: Array<Record<string, unknown>> = [];
   let emailCalls = 0;
   let smtpFailure = false;
+  let onEmailAttempt: (() => void) | undefined;
   let smtpFailedAudience: "guest" | "owner" | null = null;
   const sentEmails: Array<Record<string, unknown>> = [];
   let smtpOptions: Record<string, unknown> | null = null;
@@ -382,6 +385,7 @@ test("reservations, payments, iCal and private administration", async (t) => {
     smtpOptions = options;
     return { close() {}, async sendMail(message: Record<string, unknown>) {
       emailCalls++; lastEmail = message; sentEmails.push(message);
+      onEmailAttempt?.();
       const recipient = (message.to as { address: string }).address;
       const audience = recipient === "fixture@gmail.com" ? "owner" : "guest";
       if (smtpFailure || smtpFailedAudience === audience) throw new Error("SMTP fixture failure; do not log credentials");
@@ -396,7 +400,7 @@ test("reservations, payments, iCal and private administration", async (t) => {
       const event = domeFeedEvents.get(url.includes("romantico") ? "domo-romantico" : "domo-amplio") ?? feedEvent;
       return new Response(event ? `BEGIN:VCALENDAR\r\n${event}\r\nEND:VCALENDAR\r\n` : emptyIcs);
     }
-    if (url.includes("challenges.cloudflare.com")) return Response.json({ success: true, hostname: "fixture.netlify.app", action: "booking" });
+    if (url.includes("challenges.cloudflare.com")) return Response.json({ success: true, hostname: new URL(process.env.URL!).hostname, action: "booking" });
     if (url.endsWith("/login")) {
       loginCalls++;
       if (authFixture === "http") return new Response("Private API password", { status: 401 });
@@ -2376,6 +2380,49 @@ test("reservations, payments, iCal and private administration", async (t) => {
         if (savedSecret === undefined) delete process.env.BOOKING_RECONCILE_SECRET; else process.env.BOOKING_RECONCILE_SECRET = savedSecret;
       }
     });
+    await t.test("slow Tilopay checks cannot block the email retry queue", async () => {
+      await sql.exec("TRUNCATE reservations CASCADE");
+      const worker = await import("../src/app/api/internal/reconcile/route");
+      const unpaid = await service.startReservation(payload("2038-06-01", "2038-06-02"), null, "https://fixture.netlify.app");
+      const paid = await service.startReservation(payload("2038-06-03", "2038-06-04"), null, "https://fixture.netlify.app");
+      const paymentLink = (await db.getBooking(unpaid.id))!.payment_link_id;
+      links.get((await db.getBooking(paid.id))!.payment_link_id!)!.approved = true;
+      await service.reconcilePayment(paid.id);
+      await sql.query("UPDATE reservations SET confirmation_email_sent_at=NULL WHERE id=$1", [paid.id]);
+      const env = { ...process.env };
+      const fetchFixture = globalThis.fetch;
+      let releasePayment!: () => void;
+      const emailStarted = new Promise<void>((resolve) => { releasePayment = resolve; });
+      const timeout = setTimeout(releasePayment, 3_000);
+      let mailWhileWaiting = false;
+      let waiting = false;
+      onEmailAttempt = () => { mailWhileWaiting = waiting; releasePayment(); };
+      globalThis.fetch = async (input, init) => {
+        if (String(input).includes(`/getDetailLinkPayment/${paymentLink}/`)) {
+          waiting = true;
+          await emailStarted;
+          waiting = false;
+        }
+        return fetchFixture(input, init);
+      };
+      process.env.BOOKING_RECONCILE_ENABLED = "true";
+      process.env.BOOKING_RECONCILE_SECRET = "fixture-mail-worker-secret-1234567890";
+      try {
+        const response = await worker.POST(new Request("http://localhost/api/internal/reconcile", {
+          method: "POST", headers: { "x-reconcile-secret": process.env.BOOKING_RECONCILE_SECRET },
+        }));
+        assert.deepEqual(await response.json(), { checked: 1, emailRetries: 1, failures: 0 });
+        assert(mailWhileWaiting);
+        assert((await db.getBooking(paid.id))!.confirmation_email_sent_at);
+      } finally {
+        clearTimeout(timeout);
+        globalThis.fetch = fetchFixture;
+        onEmailAttempt = undefined;
+        for (const key of ["BOOKING_RECONCILE_ENABLED", "BOOKING_RECONCILE_SECRET"]) {
+          if (env[key] === undefined) delete process.env[key]; else process.env[key] = env[key];
+        }
+      }
+    });
     await t.test("scheduled function exposes safe failure summaries without leaking provider data", async () => {
       const { default: run } = await import("../netlify/functions/reconcile-reservations.mjs");
       const savedFetch = globalThis.fetch, savedWarn = console.warn;
@@ -2422,7 +2469,7 @@ test("reservations, payments, iCal and private administration", async (t) => {
       const savedLog = console.error; console.error = () => {};
       try { await cancelLocalReservation(cancelled.id, { dome: "domo-amplio", reason: "Cancelación previa al cambio", acknowledged: true, acknowledgeNoRefund: true }, "owner"); }
       finally { closeLinkFailure = false; console.error = savedLog; }
-      const oldSettings = { environment: process.env.TILOPAY_EXPECTED_ENVIRONMENT,
+      const oldSettings = { url: process.env.URL, environment: process.env.TILOPAY_EXPECTED_ENVIRONMENT,
         enabled: process.env.BOOKING_RECONCILE_ENABLED, secret: process.env.BOOKING_RECONCILE_SECRET };
       const savedNextLinkId = nextLinkId;
       const oldPaidLinkId = (await db.getBooking(demo.id))!.payment_link_id!;
@@ -2431,6 +2478,8 @@ test("reservations, payments, iCal and private administration", async (t) => {
       cookieValues.set(auth.ADMIN_COOKIE, token);
       try {
         process.env.TILOPAY_EXPECTED_ENVIRONMENT = "Production";
+        await assert.rejects(service.startReservation(payload("2033-02-01", "2033-02-02"), null, "https://fixture.netlify.app"), { status: 503 });
+        process.env.URL = "https://macasmoonglampings.com";
         const oldPaid = (await db.getBooking(demo.id))!;
         assert.equal(oldPaid.payment_environment, "Test");
         assert(bookingEmails(oldPaid, "https://fixture.netlify.app").guest.text.includes("sin cargo real"));
@@ -2456,7 +2505,11 @@ test("reservations, payments, iCal and private administration", async (t) => {
         assert(String(lastEmail!.text).includes("sin cargo real"));
 
         nextLinkId = Number(oldPaidLinkId); // Provider namespaces can reuse a numeric ID across environments.
-        const real = await service.startReservation(payload("2033-02-01", "2033-02-02"), null, "https://fixture.netlify.app");
+        const real = await service.startReservation(payload("2033-02-01", "2033-02-02"), null, process.env.URL);
+        assert.equal(paymentBody!.callback_url, `https://macasmoonglampings.com/api/reservations/return/${real.id}`);
+        const webhookUrl = new URL(String(paymentBody!.webhook_url));
+        assert.equal(webhookUrl.origin + webhookUrl.pathname, "https://macasmoonglampings.com/api/reservations/webhook");
+        assert.match(webhookUrl.searchParams.get("token") ?? "", /^[a-f0-9]{64}$/);
         const realPending = (await db.getBooking(real.id))!;
         assert.equal(realPending.payment_environment, "Production");
         assert.equal(realPending.payment_link_id, oldPaidLinkId);
@@ -2481,9 +2534,33 @@ test("reservations, payments, iCal and private administration", async (t) => {
         assert(oldView.reservations.every(row => row.paymentEnvironment === "Test"));
         const liveView = await manual.adminCalendar("domo-amplio", "2033-02-01", "2033-03-01", false);
         assert.equal(liveView.reservations.find(row => row.id === real.id)!.paymentEnvironment, "Production");
+
+        process.env.TILOPAY_EXPECTED_ENVIRONMENT = "Production";
+        const late = await service.startReservation(payload("2033-02-03", "2033-02-04"), null, process.env.URL);
+        const lateBooking = (await db.getBooking(late.id))!;
+        const lateWebhook = new URL(String(paymentBody!.webhook_url));
+        const lateLink = lateBooking.payment_link_id!;
+        await db.expireBooking(late.id);
+        await payments.closeInactivePaymentLink((await db.getBooking(late.id))!);
+        unavailableLinkIds.add(lateLink);
+        links.get(lateLink)!.approved = true;
+        const notifyLatePayment = (url: URL, transactionId: number) => webhook.POST(new Request(url, {
+          method: "POST", body: JSON.stringify({ tilopayLinkId: lateLink,
+            orderNumber: links.get(lateLink)!.order, tilopayOrderId: transactionId }),
+        }));
+        const transactionId = 100_000 + Number(lateLink);
+        try {
+          assert.equal((await notifyLatePayment(webhookUrl, transactionId)).status, 200);
+          assert.equal((await notifyLatePayment(lateWebhook, transactionId + 1)).status, 200);
+          assert.equal((await db.getBooking(late.id))!.payment_issue, null);
+          assert.equal((await notifyLatePayment(lateWebhook, transactionId)).status, 200);
+          assert.match((await db.getBooking(late.id))!.payment_issue ?? "", /sin bloqueo vigente/);
+          assert.equal((await db.getBooking(late.id))!.status, "expired");
+          assert.equal((await sql.query("SELECT night FROM reservation_nights WHERE reservation_id=$1", [late.id])).rows.length, 0);
+        } finally { unavailableLinkIds.delete(lateLink); }
       } finally {
         nextLinkId = savedNextLinkId; links.set(oldPaidLinkId, oldPaidLink);
-        for (const [key, value] of [["TILOPAY_EXPECTED_ENVIRONMENT", oldSettings.environment], ["BOOKING_RECONCILE_ENABLED", oldSettings.enabled], ["BOOKING_RECONCILE_SECRET", oldSettings.secret]]) {
+        for (const [key, value] of [["URL", oldSettings.url], ["TILOPAY_EXPECTED_ENVIRONMENT", oldSettings.environment], ["BOOKING_RECONCILE_ENABLED", oldSettings.enabled], ["BOOKING_RECONCILE_SECRET", oldSettings.secret]]) {
           if (value === undefined) delete process.env[key!]; else process.env[key!] = value;
         }
         await auth.logoutAdmin(); cookieValues.clear();

@@ -10,7 +10,7 @@ import { isDomeActive } from "@/lib/active-domes";
 import { getCombinedAvailability } from "@/lib/combined-availability";
 import { overlapsBlocked } from "@/lib/availability-types";
 import { createBooking, getBooking, confirmBooking, expireBooking, recordPaymentCheck, type NewBooking } from "@/lib/booking-db";
-import { createPaymentUrl, paymentApproved, requirePaymentEnvironment } from "@/lib/tilopay";
+import { createPaymentUrl, paymentApproved, requirePaymentEnvironment, type PaymentCandidate } from "@/lib/tilopay";
 import { sendConfirmation } from "@/lib/booking-email";
 import { bookingPolicyVersion } from "@/data/reservation-policies";
 import { cleanField as clean, validateStay } from "@/lib/booking-validation";
@@ -62,7 +62,11 @@ export async function startReservation(raw: unknown, testSecret: string | null, 
   } else if (process.env.TILOPAY_CHECKOUT_ENABLED !== "true") {
     throw new BookingError("Pagos en línea aún no habilitados.", 503);
   }
-  if (!test) requireCheckoutConfig();
+  const siteUrl = getSiteOrigin();
+  if (!test) {
+    requireCheckoutConfig();
+    if (!siteUrl) throw new BookingError("URL de pagos no configurada.", 503);
+  }
   const input = validate(raw);
   if (!isDomeActive(input.dome)) throw new BookingError("Este domo no admite reservas en línea actualmente.", 503);
   if (!test) await checkoutStep("security", () => verifyBookingChallenge((raw as Record<string, unknown>).turnstileToken));
@@ -77,10 +81,6 @@ export async function startReservation(raw: unknown, testSecret: string | null, 
   const amount = (raw as Record<string, unknown>).expectedAmountCents;
   if (typeof amount !== "number" || !Number.isSafeInteger(amount) || amount <= 0) {
     throw new BookingError("Revisa el precio de la estadía antes de continuar.", 400);
-  }
-  const siteUrl = getSiteOrigin();
-  if (!test && !siteUrl) {
-    throw new BookingError("URL de pagos no configurada.", 503);
   }
   const booking: NewBooking = {
     id, dome: input.dome, check_in: input.checkIn, check_out: input.checkOut,
@@ -119,7 +119,7 @@ export async function startReservation(raw: unknown, testSecret: string | null, 
   }
 }
 
-export async function reconcilePayment(id: string) {
+export async function reconcilePayment(id: string, webhookCandidate?: PaymentCandidate) {
   const booking = await getBooking(id);
   if (!booking) throw new BookingError("Reserva desconocida.", 404);
   if (booking.status === "confirmed") return booking;
@@ -130,11 +130,19 @@ export async function reconcilePayment(id: string) {
   requirePaymentEnvironment(booking);
   // Timestamp failed checks too, so one failing row cannot starve reconciliation.
   await recordPaymentCheck(id);
-  const approved = await paymentApproved(booking);
+  const approved = await paymentApproved(booking, webhookCandidate);
+  const elapsed = booking.status === "pending" && booking.expires_at && booking.expires_at.valueOf() <= Date.now();
+  if (approved === "closed-link-webhook") {
+    if (elapsed) await expireBooking(id);
+    await recordPaymentCheck(id, booking.payment_issue ?? (booking.status === "pending" && !elapsed
+      ? "Tilopay verificó un cobro informado para un enlace cerrado. Revisar el pago y gestionar la reserva manualmente."
+      : "Tilopay verificó un cobro informado para un enlace cerrado sin bloqueo vigente. Revisar y gestionar el reembolso si corresponde."));
+    return (await getBooking(id)) ?? booking;
+  }
   // false: no approved transaction found; null: detail unavailable after our
   // confirmed closure with no known attempt. Neither result confirms a booking.
   if (approved !== true) {
-    if (booking.status === "pending" && booking.expires_at && booking.expires_at.valueOf() <= Date.now()) {
+    if (elapsed) {
       await expireBooking(id);
       return (await getBooking(id))!;
     }

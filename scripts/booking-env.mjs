@@ -29,11 +29,14 @@ export function validateBookingEnv(values, { production = false } = {}) {
   const requireValue = (key) => { if (!configured(get(key))) errors.push(`Falta completar ${key}.`); };
   const requireFlag = (key, expected) => { if (get(key) !== expected) errors.push(`${key} debe ser ${expected}.`); };
   const publicKeys = new Set(["NEXT_PUBLIC_BOOKING_TEST_MODE", "NEXT_PUBLIC_TURNSTILE_SITE_KEY",
-    "NEXT_PUBLIC_WHATSAPP_URL", "NEXT_PUBLIC_CONTACT_EMAIL", "NEXT_PUBLIC_ONLINE_BOOKING_ENABLED",
+    "NEXT_PUBLIC_GA_ID", "NEXT_PUBLIC_WHATSAPP_URL", "NEXT_PUBLIC_CONTACT_EMAIL", "NEXT_PUBLIC_ONLINE_BOOKING_ENABLED",
     "NEXT_PUBLIC_CLOUDBEDS_CALENDAR_ENABLED", "NEXT_PUBLIC_CLOUDBEDS_PROPERTY_CODE",
     "NEXT_PUBLIC_CLOUDBEDS_DOMO_ROMANTICO_RID", "NEXT_PUBLIC_CLOUDBEDS_DOMO_AMPLIO_RID"]);
   for (const key of values.keys()) {
     if (key.startsWith("NEXT_PUBLIC_") && !publicKeys.has(key)) errors.push(`${key} no está autorizado como variable pública. No publiques credenciales.`);
+  }
+  if (configured(get("NEXT_PUBLIC_GA_ID")) && !/^G-[A-Z0-9]+$/.test(get("NEXT_PUBLIC_GA_ID"))) {
+    errors.push("NEXT_PUBLIC_GA_ID debe ser el identificador público de medición de Google Analytics.");
   }
   requireFlag("BOOKING_ENABLED", "true");
   for (const key of ["NEXT_PUBLIC_BOOKING_TEST_MODE", "TILOPAY_CHECKOUT_ENABLED", "BOOKING_RECONCILE_ENABLED"]) {

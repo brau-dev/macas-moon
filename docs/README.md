@@ -152,11 +152,11 @@ Los enlaces y el formulario de contacto por WhatsApp siguen disponibles.
 
 Antes de ventas reales también faltan:
 
-- Completar la dirección comercial del responsable Christian Salazar en privacidad
-  y revisar el texto final, impuestos y cargos antes de publicarlo para ventas reales.
+- Revisar el texto final de privacidad, impuestos y cargos antes de abrir ventas reales.
+  Privacidad incluye la ubicación pública de Macas Moon Glamping como contacto del responsable.
 - Mantener un responsable que atienda incidencias en el panel y revise los fallos
   del respaldo y del correo.
 - Comprobar carga y recuperación ante caídas: los lotes de pagos y correos comparten
-  presupuesto de tiempo, sin garantía de atención dentro de 15 minutos.
+  plazo de ejecución y avanzan en paralelo. Comprobar el tiempo real de atención.
 - Verificar retención de respaldos y restaurar una copia en una base aislada.
 - Confirmar importación y reapertura de fechas en ambos anuncios de Airbnb y Expedia.

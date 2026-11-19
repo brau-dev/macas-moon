@@ -1,4 +1,4 @@
-export const bookingPolicyVersion = "2026-11-15";
+export const bookingPolicyVersion = "2026-11-19";
 export const refundPolicy = "Las noches confirmadas no son reembolsables. Si necesitas ayuda o tienes dudas, contacta a Macas Moon Glamping.";
 
 export const bookingConditions = [
@@ -19,4 +19,5 @@ export const privacySections = [
   { title: "Conservación y solicitudes", text: "Los registros se conservan para atender la estancia, sus incidencias y las obligaciones aplicables. Puedes solicitar acceso, corrección, eliminación o revisión del uso de tus datos por correo o WhatsApp. La empresa evaluará la solicitud y cualquier obligación de conservación que corresponda; podrá pedir información para verificar tu identidad." },
   { title: "Tu elección", text: "Los campos marcados como obligatorios son necesarios para tramitar la reserva en línea. Si no deseas facilitarlos o autorizar este tratamiento, puedes contactar a la empresa para consultar alternativas. Puedes solicitar la revocación del consentimiento para usos futuros, sin cambiar las actuaciones realizadas previamente ni las obligaciones aplicables." },
   { title: "Preferencias y protección del formulario", text: "Guardamos el idioma que elijas en el almacenamiento local de tu navegador. La protección del formulario utiliza Cloudflare Turnstile y puede procesar información técnica del dispositivo y la conexión. Puedes borrar las preferencias desde tu navegador." },
+  { title: "Estadísticas del sitio", text: "Cuando está habilitado, Google Analytics utiliza cookies e información del navegador y la navegación para medir el uso del sitio. Puedes limitar estas cookies desde tu navegador." },
 ] as const;

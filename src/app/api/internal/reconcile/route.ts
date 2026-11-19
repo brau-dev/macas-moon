@@ -37,39 +37,57 @@ export async function POST(request: Request) {
           AND (status = 'expired' OR cancelled_from_status IN ('pending','expired')))
           THEN payment_checked_at ELSE payment_link_checked_at END ASC NULLS FIRST,
         created_at, id LIMIT 20`, [process.env.TILOPAY_EXPECTED_ENVIRONMENT]);
-    let failures = 0;
-    let checked = 0;
-    let emailRetries = 0;
     const deadline = Date.now() + 18_000;
-    for (const row of pending.rows) {
-      if (Date.now() > deadline) break;
-      checked++;
-      // A recorded late-payment incident requires human action, not repeated
-      // consultations of the same approved charge. It remains visible in admin.
-      try { if (row.verify_payment) await reconcilePayment(row.id); }
-      catch (error) { failures++; logServerError("Payment reconciliation failed", error); }
-      // Link cleanup is independent of payment-check failures and of the hold:
-      // at its own deadline close the pending link without releasing nights.
-      // Retry failed closures, including older links and late-payment incidents.
-      try {
-        const current = await getBooking(row.id);
-        if (current) await closeInactivePaymentLink(current);
-      }
-      catch (error) { failures++; logServerError("Expired payment link cleanup failed", error); }
-    }
-    const unsent = await getPool().query<Booking>(`SELECT ${bookingColumns}
-      FROM reservations WHERE kind = 'booking' AND status = 'confirmed' AND payment_environment = $1 AND
-        (confirmation_email_sent_at IS NULL OR (owner_notification_required AND owner_notification_sent_at IS NULL))
-      ORDER BY confirmed_at LIMIT 50`, [process.env.TILOPAY_EXPECTED_ENVIRONMENT]);
-    for (const row of unsent.rows) {
-      if (Date.now() > deadline) break;
-      emailRetries++;
-      try { await sendConfirmation(row); }
-      catch (error) { failures++; logServerError("Confirmation email retry failed", error); }
-    }
-    return NextResponse.json({ checked, emailRetries, failures });
+    const [payments, emails] = await Promise.all([
+      reconcilePayments(pending.rows, deadline),
+      retryEmails(deadline),
+    ]);
+    return NextResponse.json({
+      checked: payments.checked,
+      emailRetries: emails.checked,
+      failures: payments.failures + emails.failures,
+    });
   } catch (error) {
     logServerError("Scheduled reconciliation failed", error);
     return NextResponse.json({ error: "Reconciliation failed" }, { status: 503 });
   }
+}
+
+async function reconcilePayments(rows: { id: string; verify_payment: boolean }[], deadline: number) {
+  let checked = 0;
+  let failures = 0;
+  for (const row of rows) {
+    if (Date.now() > deadline) break;
+    checked++;
+    // A recorded late-payment incident requires human action, not repeated
+    // consultations of the same approved charge. It remains visible in admin.
+    try { if (row.verify_payment) await reconcilePayment(row.id); }
+    catch (error) { failures++; logServerError("Payment reconciliation failed", error); }
+    // Link cleanup is independent of payment-check failures and of the hold:
+    // at its own deadline close the pending link without releasing nights.
+    // Retry failed closures, including older links and late-payment incidents.
+    try {
+      const current = await getBooking(row.id);
+      if (current) await closeInactivePaymentLink(current);
+    }
+    catch (error) { failures++; logServerError("Expired payment link cleanup failed", error); }
+  }
+  return { checked, failures };
+}
+
+// Run mail independently so slow provider queries cannot consume its whole budget.
+async function retryEmails(deadline: number) {
+  let checked = 0;
+  let failures = 0;
+  const unsent = await getPool().query<Booking>(`SELECT ${bookingColumns}
+    FROM reservations WHERE kind = 'booking' AND status = 'confirmed' AND payment_environment = $1 AND
+      (confirmation_email_sent_at IS NULL OR (owner_notification_required AND owner_notification_sent_at IS NULL))
+    ORDER BY confirmed_at LIMIT 50`, [process.env.TILOPAY_EXPECTED_ENVIRONMENT]);
+  for (const row of unsent.rows) {
+    if (Date.now() > deadline) break;
+    checked++;
+    try { await sendConfirmation(row); }
+    catch (error) { failures++; logServerError("Confirmation email retry failed", error); }
+  }
+  return { checked, failures };
 }

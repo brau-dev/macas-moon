@@ -56,6 +56,7 @@ Los comentarios `.env` no configuran casillas ni permisos en Netlify.
 | `ADMIN_USERNAME` | De 3 a 80 caracteres: letras, números, punto, guion o guion bajo. |
 | `BOOKING_REPLY_TO` | Opcional; si está vacío, las respuestas van a `SMTP_USER`. |
 | `TILOPAY_MERCHANT_ID` | Opcional; si se define, debe coincidir con el comercio del pago. |
+| `NEXT_PUBLIC_GA_ID` | Identificador opcional de medición de Google Analytics, en Builds. |
 
 | Variables secretas | Finalidad |
 | --- | --- |
@@ -161,8 +162,7 @@ El servidor rechaza esa vía gratuita en `Production` incluso si se activa por e
 su indicador. El despliegue y el ajuste del comercio en Tilopay se comprueban aparte.
 
 Primero completar las pruebas de pagos y gestión manual de incidencias de la
-[guía del proyecto](README.md), la dirección pendiente en privacidad y la
-restauración de respaldos.
+[guía del proyecto](README.md) y comprobar la restauración de respaldos.
 Atender enlaces e incidencias Test en su entorno original; liberar desde `/admin`
 las noches ficticias y comprobar reapertura externa conservando el historial.
 
@@ -186,12 +186,19 @@ El destino confirmado es **macasmoonglampings.com**. El propietario indica que
   retornos de pago, webhook, comprobación de origen y correos. La URL alternativa
   del sitio y `check:published` también apuntan a este dominio en producción.
 - El widget Turnstile debe permitir el dominio final y sus claves deben corresponder
-  al widget real. La base del proyecto de producción debe tener las migraciones
-  pendientes aplicadas y el respaldo programado activo. Si es otra base, comprobar
-  el traslado de datos y que los anuncios importan los iCal de producción.
+  al widget real. Habilitar Netlify Database en el proyecto de producción. El sitio
+  actual es estático, así que una base nueva requiere las migraciones 0001 a 0010
+  y 0012. Con Netlify Database, se aplican al publicar el nuevo deploy. Revisar
+  el registro y mantener los datos de prueba en su proyecto separado.
+- Comprobar el respaldo programado en Functions y configurar los iCal de
+  producción en los anuncios de Airbnb y Expedia.
 - Tras el push, ejecutar `npm run check:published`. La autenticación API de Tilopay
-  no acredita que el comercio esté en modo real: el propietario indicó que aún
-  no lo ha comprobado. Revisarlo en su portal antes de abrir reservas.
+  no acredita que el comercio esté en modo real. El propietario confirmó que
+  desactivó el modo de prueba. Verificar la primera operación real autorizada,
+  incluido el retorno y la entrega del webhook con la URL registrada al crear
+  el enlace. Si la pasarela ya no ofrece el detalle de un enlace cerrado, un
+  webhook autenticado por su URL y contrastado con la consulta de Tilopay genera
+  una incidencia manual, sin confirmar la reserva.
 
 Referencias: [entornos Tilopay](https://tilopay.com/developers/entornos),
 [importación de variables](https://docs.netlify.com/build/environment-variables/get-started/#import-variables-with-the-netlify-ui)

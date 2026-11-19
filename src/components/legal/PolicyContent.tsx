@@ -23,6 +23,11 @@ export function PolicyContent({ kind }: { kind: "conditions" | "privacy" }) {
         <h2 className="font-serif text-xl text-ink">{t("Contacto")}</h2>
         <p className="mt-3"><a className="text-olive-800 underline" href={`mailto:${site.contact.email}`}>{site.contact.email}</a></p>
         <p className="mt-2"><a className="text-olive-800 underline" href={site.contact.telUrl}>{site.contact.phone}</a></p>
+        {kind === "privacy" ? <p className="mt-2">
+          <a className="text-olive-800 underline" href={site.location.mapsUrl} target="_blank" rel="noopener noreferrer">
+            {site.name}, {site.location.area}, {site.location.province}, {t(site.location.country)}
+          </a>
+        </p> : null}
         <p className="mt-2"><a className="text-olive-800 underline" href={site.contact.whatsappUrl} target="_blank" rel="noopener noreferrer">WhatsApp</a></p>
       </section>
     </div>
