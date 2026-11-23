@@ -218,77 +218,6 @@ const fixtureBlobsContext = Buffer.from(JSON.stringify({
   edgeURL: "https://blob-write.example", uncachedEdgeURL: "https://blob-read.example",
 })).toString("base64");
 
-test("scheduled reconciliation skips idle database calls and preserves concurrent checkout signals", async (t) => {
-  const { default: run } = await import("../netlify/functions/reconcile-reservations.mjs");
-  const { IDLE_RECONCILIATION_MS, wakeReconciliation } = await import("../src/lib/reconciliation-activity");
-  const settings = {
-    SITE_ID: "fixture-site", NETLIFY_BLOBS_CONTEXT: fixtureBlobsContext,
-    BOOKING_RECONCILE_ENABLED: "true", BOOKING_RECONCILE_SECRET: "fixture-worker-secret",
-    TILOPAY_EXPECTED_ENVIRONMENT: "Production", URL: "https://fixture.netlify.app",
-  };
-  const previous = { ...process.env };
-  Object.assign(process.env, settings);
-  t.after(() => {
-    for (const key of Object.keys(settings)) {
-      if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key];
-    }
-  });
-  let now = Date.now();
-  t.mock.method(Date, "now", () => now);
-  t.mock.method(console, "warn", () => {});
-  let stored: { body: string; etag: string } | undefined;
-  let writes = 0, databaseCalls = 0;
-  let busy = false, wakeDuringCheck = false, failRead = false;
-  t.mock.method(globalThis, "fetch", async (input: URL | string, init?: RequestInit) => {
-    const url = new URL(input);
-    if (url.hostname === "fixture.netlify.app") {
-      assert.equal(url.pathname, "/api/internal/reconcile");
-      databaseCalls++;
-      if (wakeDuringCheck) {
-        wakeDuringCheck = false;
-        await wakeReconciliation();
-      }
-      return Response.json({ failures: 0, idle: !busy });
-    }
-    assert(url.pathname.endsWith("/production"));
-    if (init?.method?.toUpperCase() === "GET") {
-      assert.equal(url.hostname, "blob-read.example");
-      if (failRead) return new Response(null, { status: 401 });
-      return stored ? new Response(stored.body, { headers: { etag: stored.etag } }) : new Response(null, { status: 404 });
-    }
-    assert.equal(init?.method?.toUpperCase(), "PUT");
-    const headers = new Headers(init?.headers);
-    const expected = headers.get("if-match");
-    if ((headers.get("if-none-match") === "*" && stored) || (expected && expected !== stored?.etag)) {
-      return new Response(null, { status: 412 });
-    }
-    stored = { body: String(init?.body), etag: `"${++writes}"` };
-    return new Response(null, { headers: { etag: stored.etag } });
-  });
-
-  await run(); // An existing deployment with no hint must inspect the database.
-  assert.equal(databaseCalls, 1);
-  now += IDLE_RECONCILIATION_MS - 1;
-  await run();
-  assert.equal(databaseCalls, 1, "A scheduled run within the idle window must avoid PostgreSQL.");
-  now++;
-  await run();
-  assert.equal(databaseCalls, 2, "The recovery sweep still runs once the idle window ends.");
-  await wakeReconciliation();
-  busy = true;
-  await run();
-  await run();
-  assert.equal(databaseCalls, 4, "A signal wakes the worker and outstanding work keeps it active.");
-  busy = false;
-  wakeDuringCheck = true;
-  await run();
-  await run();
-  assert.equal(databaseCalls, 6, "An empty run must not overwrite a signal written during its query.");
-  failRead = true;
-  await run();
-  assert.equal(databaseCalls, 7, "Unavailable storage must not stop scheduled reconciliation.");
-});
-
 test("reservations, payments, iCal and private administration", async (t) => {
   // Next's compiler enforces server-only imports. These tests run server modules
   // directly in Node, outside that compiler, with all providers simulated.
@@ -566,6 +495,92 @@ test("reservations, payments, iCal and private administration", async (t) => {
     const exportIcs = async () => (await exportRoute.GET(new Request("http://localhost/api/calendar"),
       { params: Promise.resolve({ dome: "domo-amplio" }) })).text();
 
+    await t.test("scheduled reconciliation skips idle SQL and preserves concurrent checkout signals", async (subtest) => {
+      const { default: run } = await import("../netlify/functions/reconcile-reservations.mjs");
+      const { POST } = await import("../src/app/api/internal/reconcile/route");
+      const { IDLE_RECONCILIATION_MS, wakeReconciliation } = await import("../src/lib/reconciliation-activity");
+      const settings = {
+        SITE_ID: "fixture-site", NETLIFY_BLOBS_CONTEXT: fixtureBlobsContext,
+        BOOKING_RECONCILE_ENABLED: "true", BOOKING_RECONCILE_SECRET: "fixture-only-worker-secret-at-least-32-characters",
+        TILOPAY_EXPECTED_ENVIRONMENT: "Production",
+      };
+      const previous = { ...process.env };
+      Object.assign(process.env, settings);
+      const busyId = "00000000-0000-4000-8000-000000000002";
+      subtest.after(async () => {
+        for (const key of Object.keys(settings)) {
+          if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key];
+        }
+        await sql.query("DELETE FROM reservations WHERE id = $1", [busyId]);
+      });
+
+      let now = Date.now();
+      subtest.mock.method(Date, "now", () => now);
+      subtest.mock.method(console, "warn", () => {});
+      let stored: { body: string; etag: string } | undefined;
+      let writes = 0, reads = 0;
+      let wakeAfterRead = false, failRead = false;
+      subtest.mock.method(globalThis, "fetch", async (input: URL | string, init?: RequestInit) => {
+        const url = new URL(input);
+        if (url.hostname === "fixture.netlify.app") {
+          assert.equal(url.pathname, "/api/internal/reconcile");
+          return POST(new Request(url, init));
+        }
+        assert(url.pathname.endsWith("/production"));
+        if (init?.method?.toUpperCase() === "GET") {
+          assert.equal(url.hostname, "blob-read.example");
+          reads++;
+          if (failRead) return new Response(null, { status: 401 });
+          const response = stored ? new Response(stored.body, { headers: { etag: stored.etag } }) : new Response(null, { status: 404 });
+          if (wakeAfterRead) {
+            wakeAfterRead = false;
+            await wakeReconciliation();
+          }
+          return response;
+        }
+        assert.equal(init?.method?.toUpperCase(), "PUT");
+        const headers = new Headers(init?.headers);
+        const expected = headers.get("if-match");
+        if ((headers.get("if-none-match") === "*" && stored) || (expected && expected !== stored?.etag)) {
+          return new Response(null, { status: 412 });
+        }
+        stored = { body: String(init?.body), etag: `"${++writes}"` };
+        return new Response(null, { headers: { etag: stored.etag } });
+      });
+
+      const sweeps = () => executedSql.filter((statement) => statement.includes("status = 'pending' AND expires_at <= now()")).length;
+      const initial = sweeps();
+      const unauthorized = await POST(new Request("https://fixture.netlify.app/api/internal/reconcile", { method: "POST" }));
+      assert.equal(unauthorized.status, 404);
+      assert.equal(reads, 0);
+      await run();
+      assert.equal(sweeps(), initial + 1);
+      now += IDLE_RECONCILIATION_MS - 1;
+      await run();
+      assert.equal(sweeps(), initial + 1, "An idle request must avoid PostgreSQL.");
+      now++;
+      await run();
+      assert.equal(sweeps(), initial + 2, "The recovery sweep still runs after the idle window.");
+
+      await sql.query(`INSERT INTO reservations (id,dome,check_in,check_out,guests,guest_name,
+        guest_email,guest_phone,billing_country,status,amount_cents,currency,payment_provider,
+        payment_environment,cancelled_from_status,payment_link_id,payment_link_checked_at)
+        VALUES ($1,'domo-amplio','2028-02-01','2028-02-02',1,'Fixture','fixture@example.com','123','CR',
+          'cancelled',0,'USD','tilopay','Production','confirmed','fixture-cooldown',now())`, [busyId]);
+      await wakeReconciliation();
+      await run();
+      await run();
+      assert.equal(sweeps(), initial + 4, "An unclosed link keeps reconciliation active during cooldown.");
+      await sql.query("DELETE FROM reservations WHERE id = $1", [busyId]);
+
+      wakeAfterRead = true;
+      await run();
+      await run();
+      assert.equal(sweeps(), initial + 6, "An empty run must preserve a concurrent checkout signal.");
+      failRead = true;
+      await run();
+      assert.equal(sweeps(), initial + 7, "Unavailable storage must not stop scheduled reconciliation.");
+    });
     await t.test("password hashing and wrong passwords", async () => {
       assert(await verifyAdminPassword("A-private-test-password!", process.env.ADMIN_PASSWORD_HASH));
       assert.equal(await verifyAdminPassword("wrong", process.env.ADMIN_PASSWORD_HASH), false);

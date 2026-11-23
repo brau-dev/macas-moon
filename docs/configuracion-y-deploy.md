@@ -147,13 +147,13 @@ de origen desconocido. La 0010 no recupera identidades de enlaces ya eliminados.
    [guía del proyecto](README.md). Comprueba precios e iCal mediante lecturas públicas;
    no comprueba pagos ni correo. Si falla, diagnosticar antes de hacer otra compra.
 
-El respaldo se activa cada 5 minutos. Si una ejecución comprueba que no queda
-trabajo, guarda una marca de hasta una hora en Netlify Blobs. Las siguientes
-ejecuciones consultan esa marca sin abrir PostgreSQL. Una reserva nueva anula la
-marca antes de mostrar el enlace de pago. Las verificaciones de pagos y correos
-pendientes mantienen su frecuencia de 5 minutos. Si falla la lectura de la marca,
-el respaldo consulta PostgreSQL con la frecuencia habitual. Netlify proporciona
-el acceso a Blobs al código ejecutado en su plataforma.
+La función programada llama a la ruta privada de conciliación cada 5 minutos.
+Si la ruta comprueba que no queda trabajo, guarda una marca de hasta una hora
+en Netlify Blobs. Las siguientes llamadas consultan esa marca antes de abrir
+PostgreSQL. Una reserva nueva anula la marca antes de mostrar el enlace de pago.
+Las verificaciones de pagos y correos pendientes mantienen su frecuencia de
+5 minutos. Si falla la lectura de la marca, la ruta consulta PostgreSQL con la
+frecuencia habitual. Netlify proporciona acceso a Blobs en su plataforma.
 
 Comparar las unidades de cómputo durante un período similar tras publicar. Los
 calendarios externos y las consultas de visitantes también pueden despertar la base.

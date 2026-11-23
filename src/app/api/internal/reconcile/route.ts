@@ -5,6 +5,7 @@ import { reconcilePayment } from "@/lib/reservation-service";
 import { sendConfirmation } from "@/lib/booking-email";
 import { closeInactivePaymentLink } from "@/lib/tilopay";
 import { logServerError } from "@/lib/safe-log";
+import { IDLE_RECONCILIATION_MS, reconciliationActivityKey, reconciliationActivityStore } from "@/lib/reconciliation-activity";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,6 +18,25 @@ export async function POST(request: Request) {
     !timingSafeEqual(Buffer.from(received), Buffer.from(expected))) {
     return new Response(null, { status: 404 });
   }
+
+  const activityKey = reconciliationActivityKey();
+  let activity: ReturnType<typeof reconciliationActivityStore> = null;
+  let activityEtag: string | null = null;
+  try {
+    const store = reconciliationActivityStore();
+    if (store) {
+      const snapshot = await store.getWithMetadata(activityKey, { type: "json" });
+      const idleUntil = snapshot?.data?.idleUntil;
+      if (typeof idleUntil === "number" && idleUntil > Date.now()) {
+        return new Response(null, { status: 204 });
+      }
+      activity = store;
+      activityEtag = snapshot?.etag ?? null;
+    }
+  } catch {
+    console.warn("Reconciliation activity read failed");
+  }
+
   try {
     // Tilopay may no longer return detail after a link is deleted. Expiration
     // must not depend on that API succeeding, or pending rows would live forever.
@@ -45,10 +65,20 @@ export async function POST(request: Request) {
     // The payment query excludes link closures in cooldown. They still need a
     // five-minute retry even if nothing was eligible during this run.
     const idle = pending.rows.length === 0 && !emails.hasWork && !(await hasUnclosedLinks());
+    const failures = payments.failures + emails.failures;
+    if (activity && idle && failures === 0) {
+      try {
+        // A booking signal can arrive while the database is being checked.
+        await activity.setJSON(activityKey, { idleUntil: Date.now() + IDLE_RECONCILIATION_MS },
+          activityEtag === null ? { onlyIfNew: true } : { onlyIfMatch: activityEtag });
+      } catch {
+        console.warn("Reconciliation activity write failed");
+      }
+    }
     return NextResponse.json({
       checked: payments.checked,
       emailRetries: emails.checked,
-      failures: payments.failures + emails.failures,
+      failures,
       idle,
     });
   } catch (error) {
