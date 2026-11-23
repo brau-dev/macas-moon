@@ -42,15 +42,28 @@ export async function POST(request: Request) {
       reconcilePayments(pending.rows, deadline),
       retryEmails(deadline),
     ]);
+    // The payment query excludes link closures in cooldown. They still need a
+    // five-minute retry even if nothing was eligible during this run.
+    const idle = pending.rows.length === 0 && !emails.hasWork && !(await hasUnclosedLinks());
     return NextResponse.json({
       checked: payments.checked,
       emailRetries: emails.checked,
       failures: payments.failures + emails.failures,
+      idle,
     });
   } catch (error) {
     logServerError("Scheduled reconciliation failed", error);
     return NextResponse.json({ error: "Reconciliation failed" }, { status: 503 });
   }
+}
+
+async function hasUnclosedLinks() {
+  const { rows } = await getPool().query<{ pending: boolean }>(`SELECT EXISTS (
+    SELECT 1 FROM reservations WHERE payment_provider = 'tilopay' AND payment_environment = $1
+      AND status IN ('expired','cancelled') AND payment_link_id IS NOT NULL
+      AND payment_link_closed_at IS NULL AND payment_link_consumed_at IS NULL
+  ) AS pending`, [process.env.TILOPAY_EXPECTED_ENVIRONMENT]);
+  return rows[0].pending;
 }
 
 async function reconcilePayments(rows: { id: string; verify_payment: boolean }[], deadline: number) {
@@ -89,5 +102,5 @@ async function retryEmails(deadline: number) {
     try { await sendConfirmation(row); }
     catch (error) { failures++; logServerError("Confirmation email retry failed", error); }
   }
-  return { checked, failures };
+  return { checked, failures, hasWork: unsent.rows.length > 0 };
 }

@@ -6,6 +6,7 @@ import { cleanField, validDate, validReservationId } from "@/lib/booking-validat
 import { getDome } from "@/data/domes";
 import { closeInactivePaymentLink } from "@/lib/tilopay";
 import { logServerError } from "@/lib/safe-log";
+import { wakeReconciliation } from "@/lib/reconciliation-activity";
 
 export async function cancelLocalReservation(id: string, input: Record<string, unknown>, actor: string,
   manualOnly = false) {
@@ -69,9 +70,18 @@ export async function cancelLocalReservation(id: string, input: Record<string, u
   // Never roll back a committed cancellation because the provider is down.
   // Persisted status/link markers let scheduled reconciliation retry the close
   // and detect an unverified payment that arrives after cancellation.
+  const booking = result.booking;
+  if (booking.payment_provider === "tilopay" && booking.payment_environment === process.env.TILOPAY_EXPECTED_ENVIRONMENT &&
+    booking.payment_link_id && !booking.payment_link_closed_at && !booking.payment_link_consumed_at) {
+    try { await wakeReconciliation(); }
+    catch (error) { logServerError("Reconciliation wake after cancellation failed", error); }
+  }
   let linkClosePending = false;
-  try { await closeInactivePaymentLink(result.booking); }
-  catch (error) { linkClosePending = true; logServerError("Cancelled payment link cleanup failed", error); }
+  try { await closeInactivePaymentLink(booking); }
+  catch (error) {
+    linkClosePending = true;
+    logServerError("Cancelled payment link cleanup failed", error);
+  }
   return { alreadyCancelled: result.alreadyCancelled, remainingBlocks: result.remaining,
     warning: (result.alreadyCancelled ? "El registro ya estaba anulado. " : result.booking.kind === "manual"
       ? "Noches liberadas del bloqueo manual. " : "Reserva anulada. ") + (result.booking.payment_provider === "tilopay"

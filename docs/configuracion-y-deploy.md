@@ -147,11 +147,18 @@ de origen desconocido. La 0010 no recupera identidades de enlaces ya eliminados.
    [guía del proyecto](README.md). Comprueba precios e iCal mediante lecturas públicas;
    no comprueba pagos ni correo. Si falla, diagnosticar antes de hacer otra compra.
 
-El respaldo único cada 5 minutos implica 288 ejecuciones diarias y 8.640 en 30 días;
-consulta la base incluso sin trabajo. Hosting, base, correo y pasarela pueden tener
-costos: esta frecuencia no garantiza que alcance un plan concreto. Comparar consumo
-tras publicar sin añadir sondeos permanentes. Consultar el panel no cierra enlaces;
-la importación iCal usa caché por instancia, y al reservar se fuerza una lectura nueva.
+El respaldo se activa cada 5 minutos. Si una ejecución comprueba que no queda
+trabajo, guarda una marca de hasta una hora en Netlify Blobs. Las siguientes
+ejecuciones consultan esa marca sin abrir PostgreSQL. Una reserva nueva anula la
+marca antes de mostrar el enlace de pago. Las verificaciones de pagos y correos
+pendientes mantienen su frecuencia de 5 minutos. Si falla la lectura de la marca,
+el respaldo consulta PostgreSQL con la frecuencia habitual. Netlify proporciona
+el acceso a Blobs al código ejecutado en su plataforma.
+
+Comparar las unidades de cómputo durante un período similar tras publicar. Los
+calendarios externos y las consultas de visitantes también pueden despertar la base.
+Consultar el panel no cierra enlaces. La importación iCal usa caché por instancia
+y al reservar se fuerza una lectura nueva.
 
 ## Preparación de cobros reales
 

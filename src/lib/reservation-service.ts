@@ -18,6 +18,7 @@ import { isResidenceCountry } from "@/lib/countries";
 import { requireCheckoutConfig } from "@/lib/checkout-config";
 import { logServerError } from "@/lib/safe-log";
 import { CheckoutError, checkoutStep } from "@/lib/checkout-error";
+import { wakeReconciliation } from "@/lib/reconciliation-activity";
 
 type BookingInput = {
   dome: string; checkIn: string; checkOut: string; guests: number;
@@ -106,6 +107,9 @@ export async function startReservation(raw: unknown, testSecret: string | null, 
     return { id, status: "confirmed" as const, amountCents: 0, currency };
   }
   try {
+    // The hold is already committed. Wake the scheduled check before making
+    // any payment link available so closure and reminders retain their timing.
+    await checkoutStep("reservation_schedule", wakeReconciliation);
     const saved = await checkoutStep("reservation_read", () => getBooking(id));
     if (!saved) throw new CheckoutError("reservation_read", "unexpected");
     const paymentUrl = await createPaymentUrl(saved, siteUrl!);

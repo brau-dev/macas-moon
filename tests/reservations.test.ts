@@ -213,6 +213,82 @@ test("published nightly-price checks accept overrides, reject stale configuratio
 
 // SQL runs against disposable in-memory PostgreSQL. All HTTP calls are fixtures.
 // No .env files are loaded, no real calendars are read, and no payments are sent.
+const fixtureBlobsContext = Buffer.from(JSON.stringify({
+  siteID: "fixture-site", token: "fixture-token",
+  edgeURL: "https://blob-write.example", uncachedEdgeURL: "https://blob-read.example",
+})).toString("base64");
+
+test("scheduled reconciliation skips idle database calls and preserves concurrent checkout signals", async (t) => {
+  const { default: run } = await import("../netlify/functions/reconcile-reservations.mjs");
+  const { IDLE_RECONCILIATION_MS, wakeReconciliation } = await import("../src/lib/reconciliation-activity");
+  const settings = {
+    SITE_ID: "fixture-site", NETLIFY_BLOBS_CONTEXT: fixtureBlobsContext,
+    BOOKING_RECONCILE_ENABLED: "true", BOOKING_RECONCILE_SECRET: "fixture-worker-secret",
+    TILOPAY_EXPECTED_ENVIRONMENT: "Production", URL: "https://fixture.netlify.app",
+  };
+  const previous = { ...process.env };
+  Object.assign(process.env, settings);
+  t.after(() => {
+    for (const key of Object.keys(settings)) {
+      if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key];
+    }
+  });
+  let now = Date.now();
+  t.mock.method(Date, "now", () => now);
+  t.mock.method(console, "warn", () => {});
+  let stored: { body: string; etag: string } | undefined;
+  let writes = 0, databaseCalls = 0;
+  let busy = false, wakeDuringCheck = false, failRead = false;
+  t.mock.method(globalThis, "fetch", async (input: URL | string, init?: RequestInit) => {
+    const url = new URL(input);
+    if (url.hostname === "fixture.netlify.app") {
+      assert.equal(url.pathname, "/api/internal/reconcile");
+      databaseCalls++;
+      if (wakeDuringCheck) {
+        wakeDuringCheck = false;
+        await wakeReconciliation();
+      }
+      return Response.json({ failures: 0, idle: !busy });
+    }
+    assert(url.pathname.endsWith("/production"));
+    if (init?.method?.toUpperCase() === "GET") {
+      assert.equal(url.hostname, "blob-read.example");
+      if (failRead) return new Response(null, { status: 401 });
+      return stored ? new Response(stored.body, { headers: { etag: stored.etag } }) : new Response(null, { status: 404 });
+    }
+    assert.equal(init?.method?.toUpperCase(), "PUT");
+    const headers = new Headers(init?.headers);
+    const expected = headers.get("if-match");
+    if ((headers.get("if-none-match") === "*" && stored) || (expected && expected !== stored?.etag)) {
+      return new Response(null, { status: 412 });
+    }
+    stored = { body: String(init?.body), etag: `"${++writes}"` };
+    return new Response(null, { headers: { etag: stored.etag } });
+  });
+
+  await run(); // An existing deployment with no hint must inspect the database.
+  assert.equal(databaseCalls, 1);
+  now += IDLE_RECONCILIATION_MS - 1;
+  await run();
+  assert.equal(databaseCalls, 1, "A scheduled run within the idle window must avoid PostgreSQL.");
+  now++;
+  await run();
+  assert.equal(databaseCalls, 2, "The recovery sweep still runs once the idle window ends.");
+  await wakeReconciliation();
+  busy = true;
+  await run();
+  await run();
+  assert.equal(databaseCalls, 4, "A signal wakes the worker and outstanding work keeps it active.");
+  busy = false;
+  wakeDuringCheck = true;
+  await run();
+  await run();
+  assert.equal(databaseCalls, 6, "An empty run must not overwrite a signal written during its query.");
+  failRead = true;
+  await run();
+  assert.equal(databaseCalls, 7, "Unavailable storage must not stop scheduled reconciliation.");
+});
+
 test("reservations, payments, iCal and private administration", async (t) => {
   // Next's compiler enforces server-only imports. These tests run server modules
   // directly in Node, outside that compiler, with all providers simulated.
@@ -1932,7 +2008,7 @@ test("reservations, payments, iCal and private administration", async (t) => {
       const run = async () => {
         const response = await worker.POST(request());
         assert.equal(response.status, 200);
-        return response.json() as Promise<{ checked: number; emailRetries: number; failures: number }>;
+        return response.json() as Promise<{ checked: number; emailRetries: number; failures: number; idle: boolean }>;
       };
       console.error = () => {};
       try {
@@ -1943,7 +2019,7 @@ test("reservations, payments, iCal and private administration", async (t) => {
         process.env.BOOKING_RECONCILE_ENABLED = "true";
         assert.equal((await worker.POST(request("wrong"))).status, 404);
         assert.equal(executedSql.length, before);
-        assert.deepEqual(await run(), { checked: 0, emailRetries: 0, failures: 0 });
+        assert.deepEqual(await run(), { checked: 0, emailRetries: 0, failures: 0, idle: true });
 
         const paid = await service.startReservation(payload("2029-10-01", "2029-10-02"), null, "https://fixture.netlify.app");
         const paidRow = (await db.getBooking(paid.id))!;
@@ -1973,6 +2049,7 @@ test("reservations, payments, iCal and private administration", async (t) => {
         assert.equal((await run()).failures, 1);
         assert.equal(detailCalls, beforeDetails + 1, "Closure first preserves authenticated payment identities.");
         assert.equal((await db.getBooking(incident.id))!.payment_link_closed_at, null);
+        assert.equal((await run()).idle, false, "A closure in cooldown still has work for the next five-minute run.");
         closeLinkFailure = false;
         await sql.query("UPDATE reservations SET payment_link_checked_at = now() - interval '3 minutes' WHERE id = $1", [incident.id]);
         assert.equal((await run()).failures, 0);
@@ -2308,7 +2385,7 @@ test("reservations, payments, iCal and private administration", async (t) => {
           method: "POST", headers: { "x-reconcile-secret": process.env.BOOKING_RECONCILE_SECRET },
         }));
         assert.equal(response.status, 200);
-        assert.deepEqual(await response.json(), { checked: 1, emailRetries: 0, failures: 0 });
+        assert.deepEqual(await response.json(), { checked: 1, emailRetries: 0, failures: 0, idle: false });
         const current = (await db.getBooking(created.id))!;
         assert.equal(current.status, "expired"); assert.equal(current.payment_verification_error, null);
         assert.equal((await sql.query("SELECT night FROM reservation_nights WHERE reservation_id=$1", [created.id])).rows.length, 0);
@@ -2411,7 +2488,7 @@ test("reservations, payments, iCal and private administration", async (t) => {
         const response = await worker.POST(new Request("http://localhost/api/internal/reconcile", {
           method: "POST", headers: { "x-reconcile-secret": process.env.BOOKING_RECONCILE_SECRET },
         }));
-        assert.deepEqual(await response.json(), { checked: 1, emailRetries: 1, failures: 0 });
+        assert.deepEqual(await response.json(), { checked: 1, emailRetries: 1, failures: 0, idle: false });
         assert(mailWhileWaiting);
         assert((await db.getBooking(paid.id))!.confirmation_email_sent_at);
       } finally {
@@ -2422,6 +2499,42 @@ test("reservations, payments, iCal and private administration", async (t) => {
           if (env[key] === undefined) delete process.env[key]; else process.env[key] = env[key];
         }
       }
+    });
+    await t.test("checkout signals the worker before opening Tilopay and releases the hold if the signal fails", async (subtest) => {
+      const settings = { SITE_ID: "fixture-site", NETLIFY_BLOBS_CONTEXT: fixtureBlobsContext,
+        BOOKING_RECONCILE_ENABLED: "true" };
+      const previous = { ...process.env };
+      Object.assign(process.env, settings);
+      subtest.after(() => {
+        for (const key of Object.keys(settings)) {
+          if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key];
+        }
+      });
+      const fetchFixture = globalThis.fetch;
+      let signalled = false, failSignal = false;
+      subtest.mock.method(globalThis, "fetch", async (input: URL | string, init?: RequestInit) => {
+        const url = new URL(input);
+        if (url.hostname === "blob-read.example") {
+          assert.equal(init?.method?.toUpperCase(), "PUT");
+          assert(url.pathname.endsWith("/test"));
+          if (failSignal) return new Response(null, { status: 401 });
+          signalled = true;
+          return new Response(null, { headers: { etag: '"fixture"' } });
+        }
+        if (url.pathname.endsWith("/createLinkPayment")) assert(signalled);
+        return fetchFixture(input, init);
+      });
+      const result = await service.startReservation(payload("2038-07-01", "2038-07-02"), null, "https://fixture.netlify.app");
+      assert.equal(result.status, "pending");
+      const linksBefore = createdPayments;
+      failSignal = true;
+      await assert.rejects(
+        service.startReservation(payload("2038-07-03", "2038-07-04"), null, "https://fixture.netlify.app"),
+        { stage: "reservation_schedule" },
+      );
+      assert.equal(createdPayments, linksBefore);
+      const { rows } = await sql.query(`SELECT status FROM reservations WHERE check_in = '2038-07-03'`);
+      assert.deepEqual(rows, [{ status: "expired" }]);
     });
     await t.test("scheduled function exposes safe failure summaries without leaking provider data", async () => {
       const { default: run } = await import("../netlify/functions/reconcile-reservations.mjs");
@@ -2497,7 +2610,7 @@ test("reservations, payments, iCal and private administration", async (t) => {
         const beforeMail = emailCalls;
         const run = await worker.POST(new Request("http://localhost/api/internal/reconcile", { method: "POST",
           headers: { "x-reconcile-secret": process.env.BOOKING_RECONCILE_SECRET } }));
-        assert.deepEqual(await run.json(), { checked: 0, emailRetries: 0, failures: 0 });
+        assert.deepEqual(await run.json(), { checked: 0, emailRetries: 0, failures: 0, idle: true });
         assert.equal(emailCalls, beforeMail); assert.equal(detailCalls, beforeDetails);
         assert.equal(loginCalls, beforeLogins); assert.equal(closedLinks, beforeClose);
         // An intentional resend retains the reservation's historical Test wording.

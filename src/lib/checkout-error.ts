@@ -1,7 +1,7 @@
 import { BookingError } from "@/lib/booking-error";
 
 export type CheckoutStage = "security" | "availability" | "reservation_create" |
-  "reservation_read" | "reservation_cleanup" | "tilopay_auth" | "tilopay_link" |
+  "reservation_read" | "reservation_cleanup" | "reservation_schedule" | "tilopay_auth" | "tilopay_link" |
   "tilopay_check" | "tilopay_close" | "payment_link_save" | "payment_link_resolution";
 type CheckoutReason = "unexpected" | "network" | "timeout" | "http" |
   "invalid_response" | "rejected" | "missing_token" | "invalid_payment_url" |
